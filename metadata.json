@@ -1,0 +1,8 @@
+{
+  "name": "Hệ thống Tối ưu Xếp phòng thi, phân công giám thị coi thi, Phân tích kết quả thi",
+  "description": "Ứng dụng phân tích dữ liệu thí sinh, tối ưu hóa xếp phòng thi và tự động hóa xuất biểu mẫu phiếu thu bài, danh sách dán phòng chuẩn in ấn A4.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
