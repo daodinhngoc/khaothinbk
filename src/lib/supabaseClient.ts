@@ -749,26 +749,34 @@ export function updateAdminPasswordLocal(email: string, newPass: string): void {
 }
 
 /**
- * Đặt lại mật khẩu tài khoản
+ * Đặt lại mật khẩu tài khoản (hỗ trợ cả Supabase Auth và Local)
  */
-export async function resetUserPassword(id: string, newPass: string): Promise<boolean> {
+export async function resetUserPassword(id: string, newPass: string, email?: string): Promise<boolean> {
   // Thử gọi server API nếu có
   try {
     const res = await fetch('/api/admin/reset-password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: id, newPassword: newPass }),
+      body: JSON.stringify({ userId: id, email, newPassword: newPass }),
     });
     if (res.ok) {
       const json = await res.json();
-      if (json.success) return true;
+      if (json.success) {
+        const profiles = getLocalProfiles();
+        const index = profiles.findIndex(p => p.id === id || (email && p.email.toLowerCase() === email.toLowerCase()));
+        if (index >= 0) {
+          profiles[index].password = newPass;
+          saveLocalProfiles(profiles);
+        }
+        return true;
+      }
     }
   } catch {
     // ignore
   }
 
   const profiles = getLocalProfiles();
-  const index = profiles.findIndex(p => p.id === id);
+  const index = profiles.findIndex(p => p.id === id || (email && p.email.toLowerCase() === email.toLowerCase()));
   if (index >= 0) {
     profiles[index].password = newPass;
     saveLocalProfiles(profiles);

@@ -386,6 +386,7 @@ export interface StudentExamScoreRecord {
   subject_scores?: Record<string, number | string | null>;
   average_score?: number | null;
   subjects_count?: number;
+  paper_images?: Record<string, string>; // Danh sách link ảnh bài thi theo môn: { "Toán": "url", "Vật lí": "url" }
   class_rank?: number | null;
   grade_rank?: number | null;
   notes?: string;
@@ -414,6 +415,7 @@ export interface ScoreLookupResult {
     subject_scores?: Record<string, number | string | null>;
     average_score?: number | null;
     subjects_count?: number;
+    paper_images?: Record<string, string>; // Link ảnh bài thi scan các môn
     class_rank?: number | null;
     grade_rank?: number | null;
     notes?: string;

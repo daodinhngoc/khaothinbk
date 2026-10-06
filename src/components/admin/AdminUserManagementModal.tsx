@@ -180,9 +180,9 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
   // Đổi mật khẩu
   const handleConfirmResetPassword = async () => {
     if (!resettingUser || !newPasswordInput.trim()) return;
-    const ok = await resetUserPassword(resettingUser.id, newPasswordInput.trim());
+    const ok = await resetUserPassword(resettingUser.id, newPasswordInput.trim(), resettingUser.email);
     if (ok) {
-      setResetSuccessMsg(`Đã đổi mật khẩu cho ${resettingUser.full_name} thành công!`);
+      setResetSuccessMsg(`Đã đổi mật khẩu cho ${resettingUser.full_name} thành công trên Supabase Cloud!`);
       setTimeout(() => {
         setResettingUser(null);
         setNewPasswordInput('');

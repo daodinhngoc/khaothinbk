@@ -73,7 +73,9 @@ export const AdminChangePasswordModal: React.FC<AdminChangePasswordModalProps> =
         return;
       }
 
-      setSuccessMessage('Đổi mật khẩu Quản trị viên thành công! Dữ liệu đã được cập nhật an toàn vào CSDL Supabase Auth.');
+      setSuccessMessage(
+        data.message || 'Đổi mật khẩu Quản trị viên thành công! Mật khẩu mới đã được cập nhật an toàn tuyệt đối vào CSDL Supabase Auth Cloud.'
+      );
       updateAdminPasswordLocal(currentUser?.email || 'admin@nbkcs.edu.vn', newPassword);
       setCurrentPassword('');
       setNewPassword('');
