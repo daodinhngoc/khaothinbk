@@ -265,10 +265,14 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   specialization TEXT NOT NULL,
   phone TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'GiaoVien',
+  permissions JSONB DEFAULT '[]'::jsonb,
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+
+-- Tự động bổ sung cột permissions nếu bảng profiles đã tồn tại từ trước:
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '[]'::jsonb;
 
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
 ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check 

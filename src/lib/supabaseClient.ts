@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { UserProfile, UserRole } from '../types';
+import { UserProfile, UserRole, UserPermission, DEFAULT_ROLE_PERMISSIONS } from '../types';
 
 // Lấy biến môi trường Supabase từ Vite
 const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL || '').trim();
@@ -42,6 +42,7 @@ const DEFAULT_MOCK_PROFILES: (UserProfile & { password?: string })[] = [
     specialization: 'Tin học & Quản trị',
     phone: '0986041183',
     role: 'Admin',
+    permissions: DEFAULT_ROLE_PERMISSIONS.Admin,
     is_active: true,
     created_at: new Date().toISOString(),
     password: 'admin123',
@@ -54,6 +55,7 @@ const DEFAULT_MOCK_PROFILES: (UserProfile & { password?: string })[] = [
     specialization: 'Quản lý thi & Khảo thí toàn trường',
     phone: '0903123456',
     role: 'BanGiamHieu',
+    permissions: DEFAULT_ROLE_PERMISSIONS.BanGiamHieu,
     is_active: true,
     created_at: new Date().toISOString(),
     password: 'bgh123',
@@ -66,6 +68,7 @@ const DEFAULT_MOCK_PROFILES: (UserProfile & { password?: string })[] = [
     specialization: 'Quản trị thi & Phòng thi',
     phone: '0912345678',
     role: 'GiaoVu',
+    permissions: DEFAULT_ROLE_PERMISSIONS.GiaoVu,
     is_active: true,
     created_at: new Date().toISOString(),
     password: 'giaovu123',
@@ -78,6 +81,7 @@ const DEFAULT_MOCK_PROFILES: (UserProfile & { password?: string })[] = [
     specialization: 'Hóa học GDPT 2018',
     phone: '0987654321',
     role: 'ToTruong',
+    permissions: DEFAULT_ROLE_PERMISSIONS.ToTruong,
     is_active: true,
     created_at: new Date().toISOString(),
     password: '123456',
@@ -418,15 +422,17 @@ export async function createNewUserAccount(payload: {
   phone: string;
   password: string;
   role: UserRole;
+  permissions?: UserPermission[];
 }): Promise<{ success: boolean; user?: UserProfile; error?: string }> {
   const cleanEmail = payload.email.trim().toLowerCase();
+  const effectivePermissions = payload.permissions || DEFAULT_ROLE_PERMISSIONS[payload.role] || [];
 
   // 1. Thử gọi backend server API (nếu server có SUPABASE_SERVICE_ROLE_KEY)
   try {
     const res = await fetch('/api/admin/create-user', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, permissions: effectivePermissions }),
     });
     if (res.ok) {
       const result = await res.json();
@@ -462,6 +468,7 @@ export async function createNewUserAccount(payload: {
             specialization: payload.specialization,
             phone: payload.phone,
             role: payload.role,
+            permissions: effectivePermissions,
           }
         }
       });
@@ -471,7 +478,7 @@ export async function createNewUserAccount(payload: {
       }
 
       if (data.user) {
-        const newProfile: UserProfile = {
+        const newProfile: any = {
           id: data.user.id,
           email: cleanEmail,
           full_name: payload.full_name,
@@ -479,11 +486,19 @@ export async function createNewUserAccount(payload: {
           specialization: payload.specialization,
           phone: payload.phone,
           role: payload.role,
+          permissions: effectivePermissions,
           is_active: true,
           created_at: new Date().toISOString(),
         };
 
-        await supabase.from('profiles').upsert(newProfile);
+        try {
+          await supabase.from('profiles').upsert(newProfile);
+        } catch {
+          const fallback = { ...newProfile };
+          delete fallback.permissions;
+          await supabase.from('profiles').upsert(fallback);
+        }
+
         const profiles = getLocalProfiles();
         profiles.unshift(newProfile);
         saveLocalProfiles(profiles);
@@ -508,6 +523,7 @@ export async function createNewUserAccount(payload: {
     specialization: payload.specialization.trim(),
     phone: payload.phone.trim(),
     role: payload.role,
+    permissions: effectivePermissions,
     is_active: true,
     created_at: new Date().toISOString(),
     password: payload.password,
@@ -532,6 +548,7 @@ export async function updateUserProfile(payload: {
   email?: string;
   password?: string;
   is_active?: boolean;
+  permissions?: UserPermission[];
 }): Promise<{ success: boolean; user?: UserProfile; error?: string }> {
   // 1. Gọi backend API
   try {
@@ -573,18 +590,33 @@ export async function updateUserProfile(payload: {
       if (payload.specialization !== undefined) updateData.specialization = payload.specialization.trim();
       if (payload.phone !== undefined) updateData.phone = payload.phone.trim();
       if (payload.role !== undefined) updateData.role = payload.role;
+      if (Array.isArray(payload.permissions)) updateData.permissions = payload.permissions;
       if (typeof payload.is_active === 'boolean') updateData.is_active = payload.is_active;
 
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('profiles')
         .update(updateData)
         .eq('id', payload.id)
         .select()
         .single();
 
+      if (error && error.message?.includes('permissions')) {
+        const withoutPerms = { ...updateData };
+        delete withoutPerms.permissions;
+        const resWithout = await supabase
+          .from('profiles')
+          .update(withoutPerms)
+          .eq('id', payload.id)
+          .select()
+          .single();
+        data = resWithout.data;
+        error = resWithout.error;
+      }
+
       if (!error && data) {
         const finalData = { ...data };
         if (payload.role !== undefined) finalData.role = payload.role;
+        if (Array.isArray(payload.permissions)) finalData.permissions = payload.permissions;
         const profiles = getLocalProfiles();
         const idx = profiles.findIndex(p => p.id === payload.id);
         if (idx >= 0) {
@@ -609,6 +641,7 @@ export async function updateUserProfile(payload: {
       specialization: payload.specialization !== undefined ? payload.specialization : profiles[idx].specialization,
       phone: payload.phone !== undefined ? payload.phone : profiles[idx].phone,
       role: payload.role !== undefined ? payload.role : profiles[idx].role,
+      permissions: Array.isArray(payload.permissions) ? payload.permissions : profiles[idx].permissions,
       is_active: payload.is_active !== undefined ? payload.is_active : profiles[idx].is_active,
       ...(payload.password ? { password: payload.password } : {}),
       updated_at: new Date().toISOString(),

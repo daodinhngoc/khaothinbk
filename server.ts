@@ -33,6 +33,45 @@ function saveStoredAdminPassword(password: string) {
   }
 }
 
+const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
+  Admin: [
+    'PHAN_HE_1_XEP_PHONG',
+    'PHAN_HE_2_GIAM_THI',
+    'PHAN_HE_3_KHAO_THI',
+    'KHAO_THI_TOAN_TRUONG',
+    'CSDL_QUAN_LY_KY_THI',
+    'CSDL_IMPORT_DIEM',
+    'CSDL_DONG_BO_ANH',
+    'CSDL_XUAT_BAO_CAO',
+    'QUAN_TRI_TAI_KHOAN'
+  ],
+  BanGiamHieu: [
+    'PHAN_HE_1_XEP_PHONG',
+    'PHAN_HE_2_GIAM_THI',
+    'PHAN_HE_3_KHAO_THI',
+    'KHAO_THI_TOAN_TRUONG',
+    'CSDL_QUAN_LY_KY_THI',
+    'CSDL_IMPORT_DIEM',
+    'CSDL_DONG_BO_ANH',
+    'CSDL_XUAT_BAO_CAO'
+  ],
+  GiaoVu: [
+    'PHAN_HE_1_XEP_PHONG',
+    'PHAN_HE_2_GIAM_THI',
+    'CSDL_QUAN_LY_KY_THI',
+    'CSDL_IMPORT_DIEM',
+    'CSDL_DONG_BO_ANH',
+    'CSDL_XUAT_BAO_CAO'
+  ],
+  ToTruong: [
+    'PHAN_HE_3_KHAO_THI',
+    'CSDL_XUAT_BAO_CAO'
+  ],
+  GiaoVien: [
+    'PHAN_HE_2_GIAM_THI'
+  ]
+};
+
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -226,9 +265,12 @@ async function startServer() {
             if (userMeta.role && userMeta.role !== profile.role) {
               profile.role = userMeta.role;
             }
+            if (Array.isArray(userMeta.permissions)) {
+              profile.permissions = userMeta.permissions;
+            }
             return res.json({ success: true, user: profile });
           } else {
-            const newProfile = {
+            const newProfile: any = {
               id: authData.user.id,
               email: cleanEmail,
               full_name: userMeta.full_name || 'Cán bộ giáo viên',
@@ -239,7 +281,12 @@ async function startServer() {
               is_active: true,
               created_at: new Date().toISOString()
             };
-            await supabaseAdmin.from('profiles').upsert(newProfile);
+            if (Array.isArray(userMeta.permissions)) {
+              newProfile.permissions = userMeta.permissions;
+            }
+            try {
+              await supabaseAdmin.from('profiles').upsert(newProfile);
+            } catch {}
             return res.json({ success: true, user: newProfile });
           }
         }
@@ -254,7 +301,7 @@ async function startServer() {
   // API Cấp tài khoản mới (Chỉ Admin gọi được)
   app.post("/api/admin/create-user", async (req, res) => {
     try {
-      const { full_name, unit, specialization, email, phone, password, role } = req.body;
+      const { full_name, unit, specialization, email, phone, password, role, permissions } = req.body;
       if (!email || !password || !full_name) {
         return res.status(400).json({ success: false, error: "Vui lòng cung cấp đầy đủ thông tin bắt buộc" });
       }
@@ -271,6 +318,7 @@ async function startServer() {
             specialization: (specialization || '').trim(),
             phone: (phone || '').trim(),
             role: role || 'GiaoVien',
+            permissions: Array.isArray(permissions) ? permissions : undefined,
           }
         });
 
@@ -279,7 +327,7 @@ async function startServer() {
         }
 
         const newUser = authData.user;
-        const profilePayload = {
+        const profilePayload: any = {
           id: newUser.id,
           email: newUser.email,
           full_name: full_name.trim(),
@@ -290,6 +338,9 @@ async function startServer() {
           is_active: true,
           created_at: new Date().toISOString()
         };
+        if (Array.isArray(permissions)) {
+          profilePayload.permissions = permissions;
+        }
 
         // Lưu đồng bộ vào bảng profiles
         const { error: profileError } = await supabaseAdmin
@@ -297,14 +348,20 @@ async function startServer() {
           .upsert(profilePayload);
 
         if (profileError) {
-          console.warn("Lưu profiles sau khi tạo auth.user gặp lỗi:", profileError);
-          if (profileError.message?.includes('profiles_role_check') || profileError.message?.includes('constraint')) {
-            const fallbackPayload = { ...profilePayload, role: 'GiaoVien' };
-            await supabaseAdmin.from('profiles').upsert(fallbackPayload);
+          console.warn("Lưu profiles sau khi tạo auth.user gặp lỗi:", profileError.message);
+          const fallbackPayload = { ...profilePayload };
+          if (profileError.message?.includes('permissions')) {
+            delete fallbackPayload.permissions;
           }
+          if (profileError.message?.includes('profiles_role_check') || profileError.message?.includes('constraint')) {
+            fallbackPayload.role = 'GiaoVien';
+          }
+          try {
+            await supabaseAdmin.from('profiles').upsert(fallbackPayload);
+          } catch {}
         }
 
-        return res.json({ success: true, user: profilePayload });
+        return res.json({ success: true, user: { ...profilePayload, permissions: permissions || [] } });
       }
 
       // Fallback nếu chưa điền SUPABASE_SERVICE_ROLE_KEY
@@ -318,6 +375,7 @@ async function startServer() {
           specialization: (specialization || '').trim(),
           phone: (phone || '').trim(),
           role: role || 'GiaoVien',
+          permissions: Array.isArray(permissions) ? permissions : [],
           is_active: true,
           created_at: new Date().toISOString()
         }
@@ -354,6 +412,10 @@ async function startServer() {
                   const metaRole = uData?.user?.user_metadata?.role;
                   if (metaRole && metaRole !== p.role) {
                     p.role = metaRole;
+                  }
+                  const metaPerms = uData?.user?.user_metadata?.permissions;
+                  if (Array.isArray(metaPerms) && metaPerms.length > 0) {
+                    p.permissions = metaPerms;
                   }
                 } catch {}
               })
@@ -427,7 +489,7 @@ async function startServer() {
   // API Cập nhật thông tin tài khoản người dùng
   app.put("/api/admin/update-user", async (req, res) => {
     try {
-      const { id, full_name, unit, specialization, phone, role, email, password, is_active } = req.body;
+      const { id, full_name, unit, specialization, phone, role, email, password, is_active, permissions } = req.body;
       if (!id) {
         return res.status(400).json({ success: false, error: "Thiếu mã tài khoản" });
       }
@@ -443,6 +505,7 @@ async function startServer() {
         if (role !== undefined) updateFields.role = role;
         if (typeof is_active === 'boolean') updateFields.is_active = is_active;
         if (email) updateFields.email = String(email).trim().toLowerCase();
+        if (Array.isArray(permissions)) updateFields.permissions = permissions;
 
         // 1. Cập nhật Supabase Auth auth.users trước (luôn thành công vì user_metadata là JSONB không bị chặn bởi CHECK constraint)
         try {
@@ -454,6 +517,7 @@ async function startServer() {
               phone: phone !== undefined ? String(phone).trim() : undefined,
               role: role !== undefined ? role : undefined,
               is_active: typeof is_active === 'boolean' ? is_active : undefined,
+              permissions: Array.isArray(permissions) ? permissions : undefined,
             }
           };
           if (typeof is_active === 'boolean') {
@@ -481,20 +545,23 @@ async function startServer() {
 
         if (profileErr) {
           console.warn("Lỗi cập nhật bảng profiles:", profileErr.message);
-          // Nếu vướng check constraint (VD: profiles_role_check cũ chưa cập nhật 'BanGiamHieu'):
-          // Cập nhật các trường khác (họ tên, đơn vị, điện thoại...) để không bị mất dữ liệu
+          const fallbackFields = { ...updateFields };
+          if (profileErr.message?.includes('permissions')) {
+            delete fallbackFields.permissions;
+          }
           if (profileErr.message?.includes('profiles_role_check') || profileErr.message?.includes('constraint')) {
-            const fallbackFields = { ...updateFields };
             delete fallbackFields.role;
-            const { data: fallbackData } = await supabaseAdmin
-              .from('profiles')
-              .update(fallbackFields)
-              .eq('id', id)
-              .select()
-              .single();
-            updatedProfile = fallbackData || { id, ...updateFields };
+          }
+          const { data: fallbackData, error: fbErr } = await supabaseAdmin
+            .from('profiles')
+            .update(fallbackFields)
+            .eq('id', id)
+            .select()
+            .single();
+          if (!fbErr && fallbackData) {
+            updatedProfile = fallbackData;
           } else {
-            return res.status(400).json({ success: false, error: profileErr.message });
+            updatedProfile = { id, ...updateFields };
           }
         } else {
           updatedProfile = profileData;
@@ -504,6 +571,7 @@ async function startServer() {
           id,
           ...updatedProfile,
           role: role !== undefined ? role : updatedProfile?.role,
+          permissions: Array.isArray(permissions) ? permissions : (updatedProfile?.permissions || []),
           updated_at: new Date().toISOString()
         };
 
@@ -520,6 +588,7 @@ async function startServer() {
           phone,
           role,
           email,
+          permissions: Array.isArray(permissions) ? permissions : [],
           is_active: typeof is_active === 'boolean' ? is_active : true,
           updated_at: new Date().toISOString()
         }
@@ -1418,6 +1487,10 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
 
         // Tạo user qua Supabase Auth Admin
         const pass = p.password || 'Gv@2025!';
+        const effectivePerms = Array.isArray(p.permissions) && p.permissions.length > 0
+          ? p.permissions
+          : (DEFAULT_ROLE_PERMISSIONS[p.role] || []);
+
         const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.createUser({
           email: cleanEmail,
           password: pass,
@@ -1428,11 +1501,12 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
             specialization: p.specialization || 'Chung',
             phone: p.phone || '',
             role: p.role || 'GiaoVien',
+            permissions: effectivePerms,
           }
         });
 
         if (authData?.user) {
-          const profileRow = {
+          const profileRow: any = {
             id: authData.user.id,
             email: cleanEmail,
             full_name: p.full_name || 'Cán bộ giáo viên',
@@ -1440,11 +1514,22 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
             specialization: p.specialization || 'Chung',
             phone: p.phone || '',
             role: p.role || 'GiaoVien',
+            permissions: effectivePerms,
             is_active: p.is_active !== false,
             created_at: new Date().toISOString()
           };
 
-          await supabaseAdmin.from('profiles').upsert(profileRow);
+          try {
+            const { error: upErr } = await supabaseAdmin.from('profiles').upsert(profileRow);
+            if (upErr && upErr.message?.includes('permissions')) {
+              const fb = { ...profileRow };
+              delete fb.permissions;
+              await supabaseAdmin.from('profiles').upsert(fb);
+            }
+          } catch (upsertErr) {
+            console.warn("Lỗi lưu hồ sơ khi sync:", upsertErr);
+          }
+
           createdList.push(profileRow);
           existingEmails.add(cleanEmail);
         } else if (authErr) {
@@ -1798,7 +1883,8 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
             const { data: studentRows } = await activeClient
               .from("student_exam_results")
               .select("*")
-              .eq("exam_id", cleanExamId);
+              .eq("exam_id", cleanExamId)
+              .ilike("sbd", cleanSbd);
 
             if (Array.isArray(studentRows)) {
               const matched = studentRows.find(
@@ -1925,11 +2011,12 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
     }
   });
 
-  // 3. API Admin: Lấy tất cả kỳ thi (kèm số lượng bài thi đã nạp)
+  // 3. API Admin: Lấy tất cả kỳ thi (kèm số lượng bài thi đã nạp chính xác, vượt qua giới hạn 1000 dòng)
   app.get("/api/admin/exams", async (req, res) => {
     try {
       let examsList: any[] = [];
       let resultsList: any[] = [];
+      const countsMap: Record<string, number> = {};
       const activeClient = supabaseAdmin || supabaseClient;
 
       if (activeClient) {
@@ -1939,13 +2026,25 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
             .select("*")
             .order("created_at", { ascending: false });
 
-          const { data: rData } = await activeClient
-            .from("student_exam_results")
-            .select("id, exam_id");
-
           if (Array.isArray(eData) && eData.length > 0) {
             examsList = eData;
-            resultsList = rData || [];
+
+            // Đếm CHÍNH XÁC số lượng bài thi từng kỳ thi bằng count: 'exact' (vượt qua giới hạn 1000 dòng mặc định của PostgREST)
+            await Promise.all(
+              eData.map(async (ex: any) => {
+                try {
+                  const { count } = await activeClient
+                    .from("student_exam_results")
+                    .select("*", { count: "exact", head: true })
+                    .eq("exam_id", ex.id);
+                  if (typeof count === "number") {
+                    countsMap[ex.id] = count;
+                  }
+                } catch (cErr) {
+                  console.warn("Count exact error for exam", ex.id, cErr);
+                }
+              })
+            );
           }
         } catch (e) {
           console.warn("Supabase admin exams error:", e);
@@ -1956,17 +2055,14 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
         const local = getLocalExamsData();
         examsList = local.exams;
         resultsList = local.results;
+        resultsList.forEach((r: any) => {
+          countsMap[r.exam_id] = (countsMap[r.exam_id] || 0) + 1;
+        });
       }
-
-      // Đếm số bài thi của mỗi kỳ thi
-      const countsMap: Record<string, number> = {};
-      resultsList.forEach((r: any) => {
-        countsMap[r.exam_id] = (countsMap[r.exam_id] || 0) + 1;
-      });
 
       const enriched = examsList.map((e: any) => ({
         ...e,
-        total_candidates: countsMap[e.id] || 0
+        total_candidates: countsMap[e.id] !== undefined ? countsMap[e.id] : 0
       }));
 
       return res.json({ success: true, exams: enriched });
@@ -2094,12 +2190,57 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
     }
   });
 
-  // 6. API Admin: Nạp hàng loạt kết quả thi của học sinh vào Kỳ thi (Chuẩn hóa UUID)
+  // Helper: Truy vấn toàn bộ học sinh của kỳ thi trên Supabase có phân trang (vượt qua giới hạn 1000 dòng mặc định)
+  async function fetchAllExamStudents(client: any, examId: string, selectFields = "*") {
+    let allRows: any[] = [];
+    let from = 0;
+    const PAGE_SIZE = 1000;
+    while (true) {
+      const { data, error } = await client
+        .from("student_exam_results")
+        .select(selectFields)
+        .eq("exam_id", examId)
+        .order("total_score", { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
+
+      if (error) {
+        console.warn("Lỗi fetchAllExamStudents:", error.message);
+        break;
+      }
+      if (!data || data.length === 0) break;
+      allRows = allRows.concat(data);
+      if (data.length < PAGE_SIZE) break;
+      from += PAGE_SIZE;
+    }
+    return allRows;
+  }
+
+  // 6. API Admin: Nạp hàng loạt kết quả thi của học sinh vào Kỳ thi (Chuẩn hóa UUID & Bảo toàn ảnh bài thi)
   app.post("/api/admin/upload-exam-results", async (req, res) => {
     try {
       const { exam_id, results } = req.body;
       if (!exam_id || !Array.isArray(results) || results.length === 0) {
         return res.status(400).json({ success: false, error: "Dữ liệu kết quả bài thi không hợp lệ hoặc rỗng." });
+      }
+
+      const activeClient = supabaseAdmin || supabaseClient;
+
+      // Bảo toàn các link ảnh bài thi đã có trên DB để khi nạp file Excel điểm mới không bao giờ bị mất ảnh scan
+      const existingPaperMetaMap = new Map<string, any>();
+      if (activeClient) {
+        try {
+          const existingStudents = await fetchAllExamStudents(activeClient, exam_id, "sbd, item_responses");
+          for (const est of existingStudents) {
+            if (est.sbd && Array.isArray(est.item_responses)) {
+              const pMeta = est.item_responses.find((it: any) => it && (it.type === 'paper_images' || it.paper_images));
+              if (pMeta) {
+                existingPaperMetaMap.set(String(est.sbd).trim().toLowerCase(), pMeta);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Không thể tải cache paper_images cũ:", e);
+        }
       }
 
       // Chuẩn hóa bản ghi
@@ -2113,10 +2254,22 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
           ? r.subjects_count 
           : (parseInt(r.subjects_count) || Object.keys(subjScores).length);
 
-        // Lưu trữ an toàn điểm các môn vào item_responses để tương thích với mọi phiên bản bảng trên Supabase
-        const itemResponses = Array.isArray(r.item_responses) && r.item_responses.length > 0
-          ? r.item_responses
-          : [{ type: "subject_scores", data: subjScores, average_score: avgScore, subjects_count: subCount }];
+        const sbdKey = String(r.sbd || "").trim().toLowerCase();
+        const existingPaperMeta = existingPaperMetaMap.get(sbdKey);
+
+        // Lưu trữ an toàn điểm các môn vào item_responses và BẢO LƯU trọn vẹn paper_images nếu có
+        let itemResponses: any[] = [];
+        if (Array.isArray(r.item_responses) && r.item_responses.length > 0) {
+          itemResponses = [...r.item_responses];
+          if (existingPaperMeta && !itemResponses.some((it: any) => it && (it.type === 'paper_images' || it.paper_images))) {
+            itemResponses.push(existingPaperMeta);
+          }
+        } else {
+          itemResponses = [{ type: "subject_scores", data: subjScores, average_score: avgScore, subjects_count: subCount }];
+          if (existingPaperMeta) {
+            itemResponses.push(existingPaperMeta);
+          }
+        }
 
         const record: any = {
           exam_id,
@@ -2154,7 +2307,6 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
       }
 
       let supabaseInserted = 0;
-      const activeClient = supabaseAdmin || supabaseClient;
 
       if (activeClient) {
         try {
@@ -2245,13 +2397,9 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
       const activeClient = supabaseAdmin || supabaseClient;
       if (activeClient) {
         try {
-          const { data, error } = await activeClient
-            .from("student_exam_results")
-            .select("*")
-            .eq("exam_id", examId)
-            .order("total_score", { ascending: false });
+          const data = await fetchAllExamStudents(activeClient, examId);
 
-          if (!error && Array.isArray(data)) {
+          if (Array.isArray(data)) {
             const enriched = data.map((matched: any) => {
               let extractedScores = matched.subject_scores || {};
               let extractedAvg = matched.average_score !== null && matched.average_score !== undefined ? matched.average_score : matched.total_score;
@@ -2335,6 +2483,236 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
     }
   });
 
+  // 8.1. API Admin: Sửa điểm học sinh (Phúc khảo, đính chính sai sót, cập nhật Supabase và tự động tính lại Điểm TB)
+  app.put("/api/admin/exam-results/:id", async (req, res) => {
+    try {
+      const resultId = req.params.id;
+      const {
+        exam_id,
+        sbd,
+        full_name,
+        class_name,
+        dob,
+        cccd,
+        subject_scores
+      } = req.body;
+
+      if (!resultId) return res.status(400).json({ success: false, error: "Thiếu mã bản ghi" });
+
+      const activeClient = supabaseAdmin || supabaseClient;
+      const cleanScores: Record<string, number> = {};
+      let calculatedTotal = 0;
+      let count = 0;
+
+      if (subject_scores && typeof subject_scores === "object") {
+        Object.entries(subject_scores).forEach(([sub, scoreVal]) => {
+          const num = typeof scoreVal === "number" ? scoreVal : parseFloat(String(scoreVal));
+          if (!isNaN(num)) {
+            const rounded = Math.round(num * 100) / 100;
+            cleanScores[sub] = rounded;
+            calculatedTotal += rounded;
+            count++;
+          }
+        });
+      }
+
+      const finalAvg = count > 0 ? Math.round((calculatedTotal / count) * 100) / 100 : 0;
+      const finalTotal = Math.round(calculatedTotal * 100) / 100;
+
+      // Bảo lưu paper_images trong item_responses
+      let existingResponses: any[] = [];
+      let existingPaperImages: any = null;
+
+      if (activeClient) {
+        try {
+          const { data: currentRec } = await activeClient
+            .from("student_exam_results")
+            .select("item_responses, paper_images")
+            .eq("id", resultId)
+            .maybeSingle();
+
+          if (currentRec) {
+            existingPaperImages = currentRec.paper_images;
+            if (Array.isArray(currentRec.item_responses)) {
+              existingResponses = currentRec.item_responses.filter(
+                (it: any) => it && it.type !== "subject_scores"
+              );
+            }
+          }
+        } catch {}
+      }
+
+      existingResponses.unshift({
+        type: "subject_scores",
+        data: cleanScores,
+        average_score: finalAvg,
+        subjects_count: count
+      });
+
+      const updatedPayload: any = {
+        sbd: String(sbd || "").trim(),
+        full_name: String(full_name || "").trim(),
+        class_name: String(class_name || "").trim(),
+        dob: String(dob || "").trim(),
+        cccd: String(cccd || "").trim(),
+        total_score: finalTotal,
+        average_score: finalAvg,
+        subjects_count: count,
+        subject_scores: cleanScores,
+        item_responses: existingResponses,
+        updated_at: new Date().toISOString()
+      };
+
+      if (activeClient) {
+        try {
+          const { error: sErr } = await activeClient
+            .from("student_exam_results")
+            .update(updatedPayload)
+            .eq("id", resultId);
+
+          if (sErr && sErr.message?.includes("average_score")) {
+            const { average_score, subjects_count, subject_scores, ...compat } = updatedPayload;
+            await activeClient.from("student_exam_results").update(compat).eq("id", resultId);
+          }
+        } catch (sErr) {
+          console.warn("Supabase update exam-result error:", sErr);
+        }
+      }
+
+      // Cập nhật Local store
+      const local = getLocalExamsData();
+      const idx = local.results.findIndex((r: any) => r.id === resultId);
+      if (idx >= 0) {
+        local.results[idx] = {
+          ...local.results[idx],
+          ...updatedPayload,
+          subject_scores: cleanScores,
+          average_score: finalAvg,
+          total_score: finalTotal
+        };
+        saveLocalExamsData(local);
+      }
+
+      return res.json({
+        success: true,
+        record: {
+          id: resultId,
+          exam_id,
+          ...updatedPayload,
+          subject_scores: cleanScores,
+          average_score: finalAvg,
+          total_score: finalTotal,
+          paper_images: existingPaperImages
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || "Lỗi máy chủ" });
+    }
+  });
+
+  // 8.2. API Admin: Bổ sung thí sinh thi bù vào kỳ thi
+  app.post("/api/admin/exam-results", async (req, res) => {
+    try {
+      const {
+        exam_id,
+        sbd,
+        full_name,
+        class_name,
+        dob,
+        cccd,
+        subject_scores
+      } = req.body;
+
+      if (!exam_id || !sbd || !full_name) {
+        return res.status(400).json({ success: false, error: "Vui lòng nhập đầy đủ SBD và Họ tên thí sinh." });
+      }
+
+      const activeClient = supabaseAdmin || supabaseClient;
+      const cleanScores: Record<string, number> = {};
+      let calculatedTotal = 0;
+      let count = 0;
+
+      if (subject_scores && typeof subject_scores === "object") {
+        Object.entries(subject_scores).forEach(([sub, scoreVal]) => {
+          const num = typeof scoreVal === "number" ? scoreVal : parseFloat(String(scoreVal));
+          if (!isNaN(num)) {
+            const rounded = Math.round(num * 100) / 100;
+            cleanScores[sub] = rounded;
+            calculatedTotal += rounded;
+            count++;
+          }
+        });
+      }
+
+      const finalAvg = count > 0 ? Math.round((calculatedTotal / count) * 100) / 100 : 0;
+      const finalTotal = Math.round(calculatedTotal * 100) / 100;
+
+      const itemResponses = [{
+        type: "subject_scores",
+        data: cleanScores,
+        average_score: finalAvg,
+        subjects_count: count
+      }];
+
+      const newRecord: any = {
+        exam_id,
+        sbd: String(sbd).trim(),
+        full_name: String(full_name).trim(),
+        class_name: String(class_name || "").trim(),
+        dob: String(dob || "").trim(),
+        cccd: String(cccd || "").trim(),
+        total_score: finalTotal,
+        average_score: finalAvg,
+        subjects_count: count,
+        subject_scores: cleanScores,
+        item_responses: itemResponses,
+        paper_images: {},
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+
+      let insertedId = "res-" + Date.now() + "-" + Math.random().toString(36).substring(2, 7);
+
+      if (activeClient) {
+        try {
+          const { data, error } = await activeClient
+            .from("student_exam_results")
+            .insert([newRecord])
+            .select("id")
+            .maybeSingle();
+
+          if (data?.id) {
+            insertedId = data.id;
+          } else if (error && error.message?.includes("average_score")) {
+            const { average_score, subjects_count, subject_scores, ...compat } = newRecord;
+            const retry = await activeClient
+              .from("student_exam_results")
+              .insert([compat])
+              .select("id")
+              .maybeSingle();
+            if (retry.data?.id) insertedId = retry.data.id;
+          }
+        } catch (sErr) {
+          console.warn("Supabase insert exam-result error:", sErr);
+        }
+      }
+
+      newRecord.id = insertedId;
+
+      // Cập nhật Local store
+      const local = getLocalExamsData();
+      local.results.unshift(newRecord);
+      saveLocalExamsData(local);
+
+      return res.json({
+        success: true,
+        record: newRecord
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || "Lỗi máy chủ" });
+    }
+  });
+
   // 9. API Admin: Lấy danh sách Buckets trên Supabase Storage
   app.get("/api/admin/storage/buckets", async (req, res) => {
     try {
@@ -2366,12 +2744,11 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
 
       const activeClient = supabaseAdmin || supabaseClient;
 
-      // Lấy danh sách thí sinh của kỳ thi này để đối soát
+      // Lấy danh sách thí sinh của kỳ thi này để đối soát (không bị giới hạn 1000)
       let studentRows: any[] = [];
       if (activeClient) {
         try {
-          const { data } = await activeClient.from("student_exam_results").select("*").eq("exam_id", examId);
-          if (Array.isArray(data)) studentRows = data;
+          studentRows = await fetchAllExamStudents(activeClient, examId);
         } catch {}
       }
       const local = getLocalExamsData();
@@ -2615,9 +2992,9 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
         return res.status(400).json({ success: false, error: "Chưa cấu hình Supabase Storage" });
       }
 
-      // Lấy danh sách học sinh của kỳ thi
+      // Lấy danh sách học sinh của kỳ thi (tải đầy đủ toàn bộ không giới hạn 1000)
       let students: any[] = [];
-      const { data: dbStudents } = await activeClient.from("student_exam_results").select("*").eq("exam_id", examId);
+      const dbStudents = await fetchAllExamStudents(activeClient, examId);
       if (Array.isArray(dbStudents) && dbStudents.length > 0) {
         students = dbStudents;
       } else {
@@ -2641,7 +3018,9 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
         'exam-dia-li': 'Địa lí',
         'exam-cn-cn': 'CNCN',
         'exam-cn-nn': 'CNNN',
-        'exam-gdktpl': 'GDKTPL'
+        'exam-gdktpl': 'GDKTPL',
+        'exam-ngu-van': 'Ngữ văn',
+        'exam-van': 'Ngữ văn'
       };
 
       function parseSbd(fileName: string): string {
@@ -2671,8 +3050,17 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
         }
         if (!subject) continue;
 
-        const { data: files } = await activeClient.storage.from(b.name).list(examId, { limit: 1000 });
-        if (!Array.isArray(files) || files.length === 0) continue;
+        // Quét toàn bộ tệp trong bucket theo phân trang (đảm bảo không bị sót nếu bucket > 1000 file)
+        let files: any[] = [];
+        let offset = 0;
+        while (true) {
+          const { data: pageFiles } = await activeClient.storage.from(b.name).list(examId, { limit: 1000, offset });
+          if (!Array.isArray(pageFiles) || pageFiles.length === 0) break;
+          files = files.concat(pageFiles);
+          if (pageFiles.length < 1000) break;
+          offset += 1000;
+        }
+        if (files.length === 0) continue;
 
         subjectStats[subject] = files.length;
         totalFilesFound += files.length;
@@ -2776,12 +3164,12 @@ Hãy trả lời bằng tiếng Việt chuẩn mực, mạch lạc, chia đề m
       let targetStudents: any[] = [];
       if (activeClient) {
         try {
-          let query = activeClient.from("student_exam_results").select("*").eq("exam_id", examId);
           if (sbd) {
-            query = query.eq("sbd", String(sbd).trim());
+            const { data } = await activeClient.from("student_exam_results").select("*").eq("exam_id", examId).eq("sbd", String(sbd).trim());
+            if (Array.isArray(data)) targetStudents = data;
+          } else {
+            targetStudents = await fetchAllExamStudents(activeClient, examId);
           }
-          const { data } = await query;
-          if (Array.isArray(data)) targetStudents = data;
         } catch {}
       }
 

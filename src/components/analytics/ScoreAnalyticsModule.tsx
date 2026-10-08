@@ -12,7 +12,7 @@ import { toPng } from 'html-to-image';
 import { 
   ExamConfig, StudentScoreRow, SubjectMetricSummary, CandidateAssigned,
   ExamMatrixItem, ExamYccdItem, ItemAnalysisResult, YccdAchievementStat,
-  ExpertPedagogicalReport, UserProfile, ClassScoreRangeStat
+  ExpertPedagogicalReport, UserProfile, ClassScoreRangeStat, hasUserPermission
 } from '../../types';
 import { 
   SAMPLE_CHEMISTRY_MATRIX, 
@@ -4267,17 +4267,29 @@ ${expertReport.partD_ActionPlan.map((act, i) => `Hành động ${i + 1}: ${act.i
               )}
             </button>
 
-            {/* Nút Đẩy kết quả lên CSDL Supabase để Học sinh tra cứu */}
+            {/* Nút Đẩy kết quả lên CSDL Supabase để Học sinh tra cứu (hoặc Chế độ Xem & Đối soát cho Tổ trưởng) */}
             {onOpenExamScoreManagementModal && (
               <button
                 type="button"
                 onClick={onOpenExamScoreManagementModal}
                 className="flex-1 sm:flex-initial px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold shadow-2xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                title="Đẩy kết quả thi lên CSDL Supabase để Học sinh tra cứu bằng SBD và CCCD"
+                title={
+                  currentUser && !hasUserPermission(currentUser, 'CSDL_IMPORT_DIEM')
+                    ? 'Mở phân hệ CSDL Điểm trên Supabase (Chế độ xem & đối soát danh sách điểm toàn trường)'
+                    : 'Đẩy kết quả thi lên CSDL Supabase để Học sinh tra cứu bằng SBD và CCCD'
+                }
               >
                 <Cloud className="w-3.5 h-3.5 text-blue-200" />
-                <span className="hidden sm:inline">Đẩy lên CSDL Tra cứu (Supabase)</span>
-                <span className="sm:hidden">Lên Supabase</span>
+                <span className="hidden sm:inline">
+                  {currentUser && !hasUserPermission(currentUser, 'CSDL_IMPORT_DIEM')
+                    ? 'Tra cứu & CSDL Điểm (Supabase)'
+                    : 'Đẩy lên CSDL Tra cứu (Supabase)'}
+                </span>
+                <span className="sm:hidden">
+                  {currentUser && !hasUserPermission(currentUser, 'CSDL_IMPORT_DIEM')
+                    ? 'CSDL Điểm'
+                    : 'Lên Supabase'}
+                </span>
               </button>
             )}
           </div>

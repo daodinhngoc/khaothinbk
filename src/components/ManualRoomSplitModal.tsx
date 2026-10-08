@@ -150,17 +150,18 @@ export const ManualRoomSplitModal: React.FC<ManualRoomSplitModalProps> = ({
     let updated: CandidateAssigned[] = [];
     let splitDescription = '';
 
+    const sortSbd = config.sortSbdAscendingInRoom ?? true;
     if (splitMode === 'equal') {
-      updated = splitRoomEqually(candidates, selectedRoom, equalParts, config.startRoomCode);
+      updated = splitRoomEqually(candidates, selectedRoom, equalParts, config.startRoomCode, sortSbd);
       splitDescription = `Đã chia đều ${getRoomDisplayLabel(selectedRoom, config.startRoomCode)} thành ${equalParts} phòng.`;
     } else if (splitMode === 'count') {
-      updated = splitRoomByCount(candidates, selectedRoom, countToMove, config.startRoomCode);
+      updated = splitRoomByCount(candidates, selectedRoom, countToMove, config.startRoomCode, sortSbd);
       splitDescription = `Đã tách ${countToMove} thí sinh từ ${getRoomDisplayLabel(selectedRoom, config.startRoomCode)} sang phòng mới.`;
     } else if (splitMode === 'subject') {
-      updated = splitRoomBySubject(candidates, selectedRoom, subjectColToSplit, config.startRoomCode);
+      updated = splitRoomBySubject(candidates, selectedRoom, subjectColToSplit, config.startRoomCode, sortSbd);
       splitDescription = `Đã tách ${getRoomDisplayLabel(selectedRoom, config.startRoomCode)} theo từng môn tự chọn (${subjectColToSplit}).`;
     } else if (splitMode === 'custom') {
-      updated = splitRoomByCustomSelection(candidates, selectedRoom, selectedSBDs, config.startRoomCode);
+      updated = splitRoomByCustomSelection(candidates, selectedRoom, selectedSBDs, config.startRoomCode, sortSbd);
       splitDescription = `Đã chuyển ${selectedSBDs.length} thí sinh được chọn từ ${getRoomDisplayLabel(selectedRoom, config.startRoomCode)} sang phòng mới.`;
     }
 

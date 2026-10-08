@@ -366,6 +366,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </p>
           </div>
 
+          {/* Công tắc linh hoạt: Sắp xếp SBD trong phòng thi tăng dần (Phương án 2) */}
+          <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-800">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                id="toggle-sort-sbd-ascending"
+                checked={config.sortSbdAscendingInRoom ?? true}
+                onChange={(e) => onChangeConfig({ sortSbdAscendingInRoom: e.target.checked })}
+                className="mt-0.5 rounded bg-slate-800 border-slate-700 text-emerald-500 focus:ring-emerald-500 cursor-pointer"
+              />
+              <div className="text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-slate-200">Sắp xếp SBD trong phòng tăng dần</span>
+                  <span className="text-[10px] bg-emerald-950 text-emerald-400 border border-emerald-700/60 font-semibold px-1.5 py-0.2 rounded">
+                    Linh hoạt
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">
+                  {(config.sortSbdAscendingInRoom ?? true)
+                    ? 'Đang bật: SBD tăng dần liên tục (1..24) trong mỗi phòng, kể cả phòng ghép nhiều môn.'
+                    : 'Đang tắt: Gom theo nhóm môn thi trước, trong từng nhóm môn SBD tăng dần.'}
+                </p>
+              </div>
+            </label>
+          </div>
+
           {/* Tùy chọn chia đều sĩ số các phòng trong nhóm (Dành cho Kiểm tra định kỳ) */}
           {config.examCategory.includes('Kiểm tra') ? (
             <div className="bg-slate-950/40 p-3 rounded-lg border border-slate-800">

@@ -4,10 +4,12 @@ import {
   CheckCircle2, AlertCircle, RefreshCw, Eye, EyeOff, Search,
   FileSpreadsheet, Users, GraduationCap, Copy, Check, Terminal, ExternalLink, ShieldCheck, Sparkles, Filter, BookOpen,
   Image as ImageIcon, Folder, FolderUp, ZoomIn, ZoomOut, RotateCw, AlertTriangle, CheckCheck,
-  HardDrive, Settings, Zap
+  HardDrive, Settings, Zap, Lock
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { ExamSeason, StudentExamScoreRecord, UserProfile } from '../../types';
+import { ExamSeason, StudentExamScoreRecord, UserProfile, hasUserPermission } from '../../types';
+import { exportMultiSubjectStatisticsExcel } from '../../utils/scoreStatisticsExcelExport';
+import { FilterRemedialStudentsModal } from './FilterRemedialStudentsModal';
 
 interface ExamScoreManagementModalProps {
   isOpen: boolean;
@@ -24,7 +26,22 @@ export const ExamScoreManagementModal: React.FC<ExamScoreManagementModalProps> =
   activeExamCategory = 'Thi thử / Khảo sát',
   activeSchoolYear = '2026-2027'
 }) => {
-  const [activeTab, setActiveTab] = useState<'upload' | 'view_scores' | 'paper_images' | 'exams' | 'sql_guide'>('upload');
+  // Xác định thẩm quyền chi tiết của tài khoản hiện tại
+  const canImportScores = currentUser ? hasUserPermission(currentUser, 'CSDL_IMPORT_DIEM') : false;
+  const canManageExams = currentUser ? hasUserPermission(currentUser, 'CSDL_QUAN_LY_KY_THI') : false;
+  const canSyncImages = currentUser ? hasUserPermission(currentUser, 'CSDL_DONG_BO_ANH') : false;
+  const canViewSql = currentUser ? (currentUser.role === 'Admin' || hasUserPermission(currentUser, 'QUAN_TRI_TAI_KHOAN')) : false;
+
+  // Nếu người dùng không có quyền nạp điểm (ví dụ Tổ trưởng), mặc định mở vào Tab 2 (Xem điểm & Lọc thống kê)
+  const [activeTab, setActiveTab] = useState<'upload' | 'view_scores' | 'paper_images' | 'exams' | 'sql_guide'>(
+    canImportScores ? 'upload' : 'view_scores'
+  );
+
+  useEffect(() => {
+    if (!canImportScores && activeTab === 'upload') {
+      setActiveTab('view_scores');
+    }
+  }, [canImportScores]);
   
   // Danh sách kỳ thi
   const [exams, setExams] = useState<ExamSeason[]>([]);
@@ -46,6 +63,20 @@ export const ExamScoreManagementModal: React.FC<ExamScoreManagementModalProps> =
   const [isLoadingResults, setIsLoadingResults] = useState<boolean>(false);
   const [searchStudent, setSearchStudent] = useState<string>('');
   const [classFilter, setClassFilter] = useState<string>('all');
+  const [showRemedialFilterModal, setShowRemedialFilterModal] = useState<boolean>(false);
+  const [isExportingStats, setIsExportingStats] = useState<boolean>(false);
+
+  // State Quản lý Sửa điểm & Thêm thí sinh thi bù / phúc khảo
+  const [editingStudent, setEditingStudent] = useState<StudentExamScoreRecord | null>(null);
+  const [isCreatingStudent, setIsCreatingStudent] = useState<boolean>(false);
+  const [editSbd, setEditSbd] = useState<string>('');
+  const [editFullName, setEditFullName] = useState<string>('');
+  const [editClassName, setEditClassName] = useState<string>('');
+  const [editCccd, setEditCccd] = useState<string>('');
+  const [editDob, setEditDob] = useState<string>('');
+  const [editSubjectScores, setEditSubjectScores] = useState<{ subject: string; score: string }[]>([]);
+  const [isSavingStudentScore, setIsSavingStudentScore] = useState<boolean>(false);
+  const [editScoreError, setEditScoreError] = useState<string | null>(null);
 
   // Trạng thái thông báo & upload
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
@@ -325,6 +356,8 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
       const data = await res.json();
       if (data.success && Array.isArray(data.results)) {
         setExamResults(data.results);
+        // Đồng bộ số lượng thí sinh chính xác vào kỳ thi để dropdown và giao diện khớp 100%
+        setExams(prev => prev.map(e => e.id === examId ? { ...e, total_candidates: data.results.length } : e));
       } else {
         setExamResults([]);
       }
@@ -350,6 +383,10 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
   // Tạo kỳ thi mới
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageExams) {
+      showToast('🔒 Bị khóa: Bạn không có quyền tạo kỳ thi mới (cần quyền CSDL_QUAN_LY_KY_THI).', 'error');
+      return;
+    }
     if (!newTitle.trim()) {
       showToast('Vui lòng nhập tên kỳ thi', 'error');
       return;
@@ -397,6 +434,10 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
   // Bật/Tắt công bố kỳ thi (Toggle is_published)
   const handleTogglePublish = async (exam: ExamSeason) => {
+    if (!canManageExams) {
+      showToast('🔒 Bị khóa: Bạn không có quyền thay đổi trạng thái công bố kỳ thi.', 'error');
+      return;
+    }
     try {
       const nextPublished = !exam.is_published;
       const res = await fetch('/api/admin/exams', {
@@ -423,6 +464,10 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
   // Xóa kỳ thi
   const handleDeleteExam = async (examId: string, title: string) => {
+    if (!canManageExams) {
+      showToast('🔒 Bị khóa: Bạn không có quyền xóa kỳ thi trên CSDL.', 'error');
+      return;
+    }
     if (!window.confirm(`Thầy/Cô có chắc chắn muốn xóa kỳ thi "${title}" và toàn bộ dữ liệu điểm của kỳ thi này không?`)) {
       return;
     }
@@ -499,6 +544,12 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
   const handleUploadExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    if (!canImportScores) {
+      showToast('🔒 Bị khóa: Bạn không có quyền nạp điểm vào CSDL (cần quyền CSDL_IMPORT_DIEM).', 'error');
+      e.target.value = '';
+      return;
+    }
 
     if (!selectedExamId) {
       showToast('Vui lòng chọn một kỳ thi trước khi nạp file điểm!', 'error');
@@ -668,8 +719,174 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
     reader.readAsBinaryString(file);
   };
 
+  // Mở popup chỉnh sửa điểm cho 1 học sinh (Đính chính điểm, phúc khảo, thi bù)
+  const handleOpenEditStudent = (student: StudentExamScoreRecord) => {
+    setEditingStudent(student);
+    setIsCreatingStudent(false);
+    setEditSbd(student.sbd || '');
+    setEditFullName(student.full_name || '');
+    setEditClassName(student.class_name || '');
+    setEditCccd(student.cccd || '');
+    setEditDob(student.dob || '');
+
+    const scoresObj = student.subject_scores || {};
+    const list: { subject: string; score: string }[] = [];
+    Object.entries(scoresObj).forEach(([sub, scoreVal]) => {
+      list.push({ subject: sub, score: scoreVal !== undefined && scoreVal !== null ? String(scoreVal) : '' });
+    });
+    if (list.length === 0) {
+      list.push({ subject: 'Toán', score: '' });
+    }
+    setEditSubjectScores(list);
+    setEditScoreError(null);
+  };
+
+  // Mở popup thêm mới thí sinh thi bù (Chưa có trong danh sách nạp trước đó)
+  const handleOpenCreateStudent = () => {
+    setEditingStudent(null);
+    setIsCreatingStudent(true);
+    setEditSbd('');
+    setEditFullName('');
+    setEditClassName(classFilter !== 'all' ? classFilter : '12A1');
+    setEditCccd('');
+    setEditDob('');
+    setEditSubjectScores([
+      { subject: 'Toán', score: '' },
+      { subject: 'Ngữ văn', score: '' }
+    ]);
+    setEditScoreError(null);
+  };
+
+  // Thêm dòng môn thi mới trong form sửa/thêm
+  const handleAddSubjectRow = () => {
+    const commonSubjects = ['Toán', 'Ngữ văn', 'Tiếng Anh', 'Vật lí', 'Hóa học', 'Sinh học', 'Lịch sử', 'Địa lí', 'Tin học', 'GDKTPL', 'Công nghệ'];
+    const existing = new Set(editSubjectScores.map(s => s.subject));
+    const nextSub = commonSubjects.find(s => !existing.has(s)) || 'Môn khác';
+    setEditSubjectScores(prev => [...prev, { subject: nextSub, score: '' }]);
+  };
+
+  // Xóa 1 dòng môn thi
+  const handleRemoveSubjectRow = (index: number) => {
+    setEditSubjectScores(prev => prev.filter((_, idx) => idx !== index));
+  };
+
+  // Thay đổi điểm hoặc tên môn
+  const handleSubjectScoreChange = (index: number, field: 'subject' | 'score', val: string) => {
+    setEditSubjectScores(prev => prev.map((item, idx) => idx === index ? { ...item, [field]: val } : item));
+  };
+
+  // Tính Điểm TB xem trước trực tiếp khi người dùng nhập điểm
+  const calculatedPreviewStats = useMemo(() => {
+    let total = 0;
+    let count = 0;
+    editSubjectScores.forEach(it => {
+      const num = parseFloat(it.score);
+      if (!isNaN(num) && num >= 0 && num <= 10) {
+        total += num;
+        count++;
+      }
+    });
+    const avg = count > 0 ? (total / count).toFixed(2) : '0.00';
+    return {
+      average: avg,
+      total: total.toFixed(2),
+      count
+    };
+  }, [editSubjectScores]);
+
+  // Lưu chỉnh sửa hoặc thêm mới điểm học sinh lên Supabase Cloud
+  const handleSaveStudentScore = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canImportScores && !canManageExams) {
+      showToast('🔒 Bị khóa: Bạn không có quyền chỉnh sửa dữ liệu điểm trên CSDL.', 'error');
+      return;
+    }
+    if (!editSbd.trim() || !editFullName.trim()) {
+      setEditScoreError('Vui lòng nhập đầy đủ Số báo danh (SBD) và Họ và tên thí sinh.');
+      return;
+    }
+
+    const cleanMap: Record<string, number> = {};
+    for (const it of editSubjectScores) {
+      if (it.subject.trim()) {
+        const num = parseFloat(it.score);
+        if (!isNaN(num)) {
+          if (num < 0 || num > 10) {
+            setEditScoreError(`Điểm môn "${it.subject}" không hợp lệ (phải nằm trong khoảng từ 0.0 đến 10.0).`);
+            return;
+          }
+          cleanMap[it.subject.trim()] = Math.round(num * 100) / 100;
+        }
+      }
+    }
+
+    setIsSavingStudentScore(true);
+    setEditScoreError(null);
+
+    try {
+      if (isCreatingStudent) {
+        // Thêm mới thí sinh thi bù
+        const res = await fetch('/api/admin/exam-results', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            exam_id: selectedExamId,
+            sbd: editSbd.trim(),
+            full_name: editFullName.trim(),
+            class_name: editClassName.trim(),
+            dob: editDob.trim(),
+            cccd: editCccd.trim(),
+            subject_scores: cleanMap
+          })
+        });
+        const data = await res.json();
+        if (data.success && data.record) {
+          showToast(`Đã bổ sung thí sinh "${editFullName.trim()}" vào kỳ thi và CSDL Supabase!`, 'success');
+          setExamResults(prev => [data.record, ...prev]);
+          setEditingStudent(null);
+          setIsCreatingStudent(false);
+          await fetchExams();
+        } else {
+          setEditScoreError(data.error || 'Lỗi khi thêm mới thí sinh');
+        }
+      } else if (editingStudent) {
+        // Cập nhật điểm cho thí sinh đã có
+        const res = await fetch(`/api/admin/exam-results/${editingStudent.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            exam_id: selectedExamId,
+            sbd: editSbd.trim(),
+            full_name: editFullName.trim(),
+            class_name: editClassName.trim(),
+            dob: editDob.trim(),
+            cccd: editCccd.trim(),
+            subject_scores: cleanMap
+          })
+        });
+        const data = await res.json();
+        if (data.success && data.record) {
+          showToast(`Đã cập nhật điểm thí sinh "${editFullName.trim()}" thành công lên CSDL Supabase!`, 'success');
+          setExamResults(prev => prev.map(r => r.id === editingStudent.id ? { ...r, ...data.record } : r));
+          setEditingStudent(null);
+          setIsCreatingStudent(false);
+        } else {
+          setEditScoreError(data.error || 'Lỗi khi cập nhật điểm thí sinh');
+        }
+      }
+    } catch (err: any) {
+      setEditScoreError(err?.message || 'Lỗi kết nối máy chủ');
+    } finally {
+      setIsSavingStudentScore(false);
+    }
+  };
+
   // Xóa 1 bản ghi điểm
   const handleDeleteScore = async (resultId: string, studentName: string) => {
+    if (!canImportScores && !canManageExams) {
+      showToast('🔒 Bị khóa: Bạn không có quyền xóa dữ liệu bài thi trên CSDL.', 'error');
+      return;
+    }
     if (!window.confirm(`Thầy/Cô có muốn xóa điểm của học sinh "${studentName}" không?`)) return;
 
     try {
@@ -806,6 +1023,10 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
   // Bắt đầu nạp hàng loạt ảnh bài thi lên Supabase (Hỗ trợ nén ảnh & phân tách Bucket)
   const handleStartUploadPapers = async () => {
+    if (!canSyncImages) {
+      showToast('🔒 Bị khóa: Bạn không có quyền nạp ảnh bài thi lên Supabase Storage (cần quyền CSDL_DONG_BO_ANH).', 'error');
+      return;
+    }
     if (!selectedExamId) {
       showToast('Vui lòng chọn kỳ thi trước khi nạp ảnh bài thi!', 'error');
       return;
@@ -932,6 +1153,10 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
   // Xóa ảnh của 1 học sinh theo môn
   const handleDeleteStudentPaper = async (sbd: string, subject: string, studentName: string) => {
+    if (!canSyncImages) {
+      showToast('🔒 Bị khóa: Bạn không có quyền xóa ảnh bài thi (cần quyền CSDL_DONG_BO_ANH).', 'error');
+      return;
+    }
     if (!window.confirm(`Thầy/Cô có chắc chắn muốn xóa ảnh bài thi môn ${subject} của học sinh "${studentName}" (SBD: ${sbd})?`)) return;
 
     try {
@@ -970,6 +1195,10 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
   // Xóa toàn bộ ảnh của 1 môn trong kỳ thi (Tối ưu phản hồi tức thì và dọn dẹp Storage)
   const handleDeleteAllPapersOfSubject = async (subject: string) => {
+    if (!canSyncImages) {
+      showToast('🔒 Bị khóa: Bạn không có quyền xóa ảnh bài thi (cần quyền CSDL_DONG_BO_ANH).', 'error');
+      return;
+    }
     if (!window.confirm(`CẢNH BÁO: Thầy/Cô có chắc chắn muốn xóa TOÀN BỘ ảnh bài thi môn "${subject}" của tất cả thí sinh trong kỳ thi này không?\n\n(Hành động này sẽ xóa cả dữ liệu trong bảng điểm và giải phóng dung lượng trên Supabase Storage).`)) return;
 
     setIsDeletingPapers(true);
@@ -1013,6 +1242,10 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
   // Quét & Tự động đồng bộ toàn bộ ảnh từ các Bucket Storage trên Supabase vào CSDL
   const handleSyncStoragePapers = async () => {
+    if (!canSyncImages) {
+      showToast('🔒 Bị khóa: Bạn không có quyền đồng bộ ảnh từ Storage (cần quyền CSDL_DONG_BO_ANH).', 'error');
+      return;
+    }
     if (!selectedExamId) {
       showToast('Vui lòng chọn kỳ thi trước khi đồng bộ ảnh!', 'error');
       return;
@@ -1078,6 +1311,50 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
   const existingPaperSubjects = useMemo(() => {
     return Array.from(new Set(uploadedPapersList.map(p => p.subject))).sort();
   }, [uploadedPapersList]);
+
+  // Danh sách các môn thi thực tế có trong kỳ thi
+  const detectedExamSubjects = useMemo(() => {
+    const set = new Set<string>();
+    examResults.forEach(r => {
+      const scores = r.subject_scores || {};
+      Object.keys(scores).forEach(k => {
+        if (k && k !== 'total' && k !== 'avg') set.add(k);
+      });
+      if (Array.isArray(r.item_responses)) {
+        const sm = r.item_responses.find((it: any) => it && (it.type === 'subject_scores' || it.data));
+        if (sm && sm.data) {
+          Object.keys(sm.data).forEach(k => { if (k) set.add(k); });
+        }
+      }
+    });
+    if (set.size === 0) {
+      return ['Toán', 'Ngữ văn', 'Tiếng Anh', 'Vật lí', 'Hóa học', 'Sinh học', 'Lịch sử', 'Địa lí', 'GDKTPL', 'Tin học'];
+    }
+    return Array.from(set).sort();
+  }, [examResults]);
+
+  // Xuất Báo cáo Thống kê Phổ điểm Đa Sheet
+  const handleExportMultiSubjectStatistics = async () => {
+    if (examResults.length === 0) {
+      showToast('Chưa có dữ liệu học sinh để xuất thống kê!', 'error');
+      return;
+    }
+    const currentExam = exams.find(e => e.id === selectedExamId);
+    setIsExportingStats(true);
+    try {
+      await exportMultiSubjectStatisticsExcel({
+        examTitle: currentExam?.title || 'Kỳ thi',
+        academicYear: currentExam?.academic_year || activeSchoolYear,
+        subjects: detectedExamSubjects,
+        allStudents: examResults
+      });
+      showToast('Đã xuất thành công file Excel Báo cáo Phổ điểm đa Sheet!', 'success');
+    } catch (err: any) {
+      showToast('Lỗi xuất file Excel: ' + (err?.message || ''), 'error');
+    } finally {
+      setIsExportingStats(false);
+    }
+  };
 
   // Bộ lọc danh sách ảnh bài thi đã nạp
   const filteredUploadedPapers = useMemo(() => {
@@ -1172,6 +1449,11 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
           >
             <Upload className="w-4 h-4" />
             <span>1. Nạp File Bảng Điểm (.xlsx)</span>
+            {!canImportScores && (
+              <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded-full text-[10px] font-bold flex items-center gap-0.5" title="Bị khóa quyền nạp dữ liệu vào CSDL">
+                <Lock className="w-2.5 h-2.5" /> Bị khóa
+              </span>
+            )}
           </button>
 
           <button
@@ -1184,6 +1466,11 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
           >
             <Users className="w-4 h-4" />
             <span>2. Danh sách Điểm đã nạp ({examResults.length})</span>
+            {!canImportScores && (
+              <span className="px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded-full text-[10px] font-bold">
+                Xem & Lọc điểm
+              </span>
+            )}
           </button>
 
           <button
@@ -1197,11 +1484,15 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
             <ImageIcon className="w-4 h-4 text-indigo-600" />
             <span className="flex items-center gap-1.5">
               <span>3. Nạp & Quản lý Ảnh Bài Thi (Scan)</span>
-              {uploadedPapersList.length > 0 && (
+              {!canSyncImages ? (
+                <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded-full text-[10px] font-bold flex items-center gap-0.5" title="Chỉ xem ảnh bài thi, không có quyền nạp/xóa CSDL">
+                  <Lock className="w-2.5 h-2.5" /> Chỉ xem
+                </span>
+              ) : uploadedPapersList.length > 0 ? (
                 <span className="px-1.5 py-0.2 bg-indigo-100 text-indigo-800 rounded-full text-[10px] font-mono font-bold">
                   {uploadedPapersList.length}
                 </span>
-              )}
+              ) : null}
             </span>
           </button>
 
@@ -1215,18 +1506,37 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
           >
             <GraduationCap className="w-4 h-4" />
             <span>4. Quản lý Kỳ thi & Công bố ({exams.length})</span>
+            {!canManageExams && (
+              <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 rounded-full text-[10px] font-bold flex items-center gap-0.5" title="Chỉ xem danh sách kỳ thi, không có quyền tạo/xóa/đổi công bố">
+                <Lock className="w-2.5 h-2.5" /> Chỉ xem
+              </span>
+            )}
           </button>
 
           <button
-            onClick={() => setActiveTab('sql_guide')}
+            onClick={() => {
+              if (!canViewSql) {
+                showToast('🔒 Chỉ Quản trị viên (Admin) mới có quyền truy cập mã SQL Supabase.', 'error');
+                return;
+              }
+              setActiveTab('sql_guide');
+            }}
             className={`py-2.5 px-4 border-b-2 rounded-t-lg flex items-center gap-2 transition-colors cursor-pointer ${
-              activeTab === 'sql_guide'
-                ? 'border-blue-600 text-blue-700 bg-white shadow-2xs font-bold'
-                : 'border-transparent text-slate-600 hover:text-slate-900 font-semibold'
+              !canViewSql
+                ? 'border-transparent text-slate-400 hover:text-slate-500 opacity-60'
+                : activeTab === 'sql_guide'
+                  ? 'border-blue-600 text-blue-700 bg-white shadow-2xs font-bold'
+                  : 'border-transparent text-slate-600 hover:text-slate-900 font-semibold'
             }`}
+            title={!canViewSql ? '🔒 Bị khóa: Chỉ dành riêng cho Quản trị viên hệ thống' : 'Mã SQL Supabase'}
           >
             <Terminal className="w-4 h-4 text-indigo-600" />
             <span>5. Mã SQL Supabase</span>
+            {!canViewSql && (
+              <span className="px-1.5 py-0.2 bg-slate-200 text-slate-600 rounded-full text-[10px] font-bold flex items-center gap-0.5">
+                <Lock className="w-2.5 h-2.5" /> Admin
+              </span>
+            )}
           </button>
         </div>
 
@@ -1237,6 +1547,23 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
           {activeTab === 'upload' && (
             <div className="space-y-6">
               
+              {/* Cảnh báo khi người dùng không có quyền nạp điểm */}
+              {!canImportScores && (
+                <div className="p-4 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-950 flex items-start gap-3 shadow-xs">
+                  <div className="p-1.5 bg-amber-200/80 rounded-xl text-amber-900 shrink-0 mt-0.5">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <div className="font-bold text-amber-900 text-sm">
+                      Chức năng Nạp Điểm CSDL đang bị khóa (Chế độ Chỉ xem):
+                    </div>
+                    <div className="text-amber-800 leading-relaxed">
+                      Tài khoản của Thầy/Cô chỉ có thẩm quyền <strong>Xem danh sách, Tra cứu & Lọc thống kê điểm</strong>. Thao tác nạp file hoặc ghi đè CSDL điểm toàn trường yêu cầu quyền <code>CSDL_IMPORT_DIEM</code> (chỉ dành cho Quản trị viên / Ban Giám hiệu / Giáo vụ) nhằm bảo vệ an toàn toàn vẹn dữ liệu kết quả thi.
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Chọn Kỳ thi tiếp nhận dữ liệu */}
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div className="space-y-1 flex-1">
@@ -1258,18 +1585,36 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
                 <button
                   type="button"
-                  onClick={() => setShowCreateExamForm(true)}
-                  className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 shadow-sm"
+                  disabled={!canManageExams}
+                  onClick={() => {
+                    if (!canManageExams) {
+                      showToast('🔒 Bị khóa: Bạn không có quyền tạo kỳ thi mới.', 'error');
+                      return;
+                    }
+                    setShowCreateExamForm(true);
+                  }}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shrink-0 shadow-sm ${
+                    !canManageExams
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white cursor-pointer'
+                  }`}
+                  title={!canManageExams ? '🔒 Bị khóa: Cần quyền CSDL_QUAN_LY_KY_THI' : 'Tạo kỳ thi mới'}
                 >
-                  <Plus className="w-4 h-4" />
+                  {!canManageExams ? <Lock className="w-3.5 h-3.5 text-slate-500" /> : <Plus className="w-4 h-4" />}
                   <span>+ Tạo Kỳ thi mới</span>
                 </button>
               </div>
 
               {/* KHUNG IMPORT DUY NHẤT – CHUẨN HÓA FILE PHẲNG CÓ CỘT CCCD */}
-              <div className="border-2 border-dashed border-blue-300 hover:border-blue-500 bg-gradient-to-br from-blue-50/60 via-indigo-50/30 to-slate-50 rounded-2xl p-6 sm:p-8 text-center transition-all space-y-4">
-                <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white mx-auto flex items-center justify-center shadow-lg shadow-blue-500/30">
-                  <FileSpreadsheet className="w-7 h-7" />
+              <div className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center transition-all space-y-4 ${
+                !canImportScores
+                  ? 'border-slate-300 bg-slate-50/80'
+                  : 'border-blue-300 hover:border-blue-500 bg-gradient-to-br from-blue-50/60 via-indigo-50/30 to-slate-50'
+              }`}>
+                <div className={`w-14 h-14 rounded-2xl mx-auto flex items-center justify-center shadow-lg ${
+                  !canImportScores ? 'bg-slate-400 text-white shadow-slate-400/20' : 'bg-blue-600 text-white shadow-blue-500/30'
+                }`}>
+                  {!canImportScores ? <Lock className="w-7 h-7" /> : <FileSpreadsheet className="w-7 h-7" />}
                 </div>
 
                 <div className="space-y-1">
@@ -1283,14 +1628,24 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
 
                 {/* Các nút hành động chính */}
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-                  <label className="w-full sm:w-auto px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold shadow-md shadow-blue-500/25 flex items-center justify-center gap-2 cursor-pointer transition-all">
-                    <Upload className="w-4 h-4" />
-                    <span>{isUploading ? 'Đang phân tích và nạp điểm...' : 'Chọn file Excel nạp điểm'}</span>
+                  <label className={`w-full sm:w-auto px-6 py-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                    !canImportScores
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300 shadow-none'
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-md shadow-blue-500/25 cursor-pointer'
+                  }`}>
+                    {!canImportScores ? <Lock className="w-4 h-4 text-slate-500" /> : <Upload className="w-4 h-4" />}
+                    <span>
+                      {!canImportScores
+                        ? '🔒 Đã khóa nạp điểm (Chỉ xem thống kê)'
+                        : isUploading
+                          ? 'Đang phân tích và nạp điểm...'
+                          : 'Chọn file Excel nạp điểm'}
+                    </span>
                     <input
                       type="file"
                       accept=".xlsx, .xls"
                       onChange={handleUploadExcel}
-                      disabled={isUploading}
+                      disabled={isUploading || !canImportScores}
                       className="hidden"
                     />
                   </label>
@@ -1370,8 +1725,8 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
           {/* TAB 2: XEM DANH SÁCH ĐIỂM ĐÃ NẠP CỦA KỲ THI */}
           {activeTab === 'view_scores' && (
             <div className="space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-2 flex-1">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div className="flex flex-wrap items-center gap-2 flex-1">
                   <select
                     value={selectedExamId}
                     onChange={(e) => setSelectedExamId(e.target.value)}
@@ -1396,17 +1751,73 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                       ))}
                     </select>
                   )}
+
+                  <span className="text-xs font-bold text-slate-600 bg-white px-2.5 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+                    {filteredResults.length} / {examResults.length} thí sinh
+                  </span>
                 </div>
 
-                <div className="relative w-full sm:w-64">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                  <input
-                    type="text"
-                    value={searchStudent}
-                    onChange={(e) => setSearchStudent(e.target.value)}
-                    placeholder="Tìm theo tên, SBD, CCCD..."
-                    className="w-full bg-white border border-slate-300 rounded-xl pl-9 pr-3 py-2 text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
-                  />
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative w-full sm:w-56">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                    <input
+                      type="text"
+                      value={searchStudent}
+                      onChange={(e) => setSearchStudent(e.target.value)}
+                      placeholder="Tìm theo tên, SBD, CCCD..."
+                      className="w-full bg-white border border-slate-300 rounded-xl pl-9 pr-3 py-2 text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Nút 1: Xuất Báo cáo Phổ điểm Đa Sheet */}
+                  <button
+                    type="button"
+                    disabled={examResults.length === 0 || isExportingStats}
+                    onClick={handleExportMultiSubjectStatistics}
+                    className="px-3 py-2 bg-indigo-700 hover:bg-indigo-800 active:scale-95 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:bg-slate-300 disabled:cursor-not-allowed"
+                    title="Xuất file Excel gồm nhiều Sheet (mỗi môn 1 Sheet) trình bày chuẩn in A4 ngang"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-indigo-200" />
+                    <span>{isExportingStats ? 'Đang xuất...' : 'Xuất Báo cáo Phổ điểm (Đa Sheet)'}</span>
+                  </button>
+
+                  {/* Nút 2: Lọc DS Phụ đạo / Bồi dưỡng theo ngưỡng điểm */}
+                  <button
+                    type="button"
+                    disabled={examResults.length === 0}
+                    onClick={() => setShowRemedialFilterModal(true)}
+                    className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:bg-slate-300 disabled:cursor-not-allowed"
+                    title="Lọc học sinh theo môn và ngưỡng điểm (< 5.0 phụ đạo, >= 8.0 bồi dưỡng) và xuất Excel"
+                  >
+                    <Filter className="w-4 h-4 text-emerald-200" />
+                    <span>Lọc DS Phụ đạo / Bồi dưỡng</span>
+                  </button>
+
+                  {/* Nút 3: Bổ sung Thí sinh thi bù / Phúc khảo */}
+                  <button
+                    type="button"
+                    disabled={!canImportScores && !canManageExams}
+                    onClick={() => {
+                      if (!canImportScores && !canManageExams) {
+                        showToast('🔒 Bị khóa: Bạn không có quyền thêm mới thí sinh thi bù (cần quyền CSDL_IMPORT_DIEM hoặc CSDL_QUAN_LY_KY_THI).', 'error');
+                        return;
+                      }
+                      handleOpenCreateStudent();
+                    }}
+                    className={`px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-2xs ${
+                      !canImportScores && !canManageExams
+                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                        : 'bg-blue-600 hover:bg-blue-700 active:scale-95 text-white cursor-pointer'
+                    }`}
+                    title={
+                      !canImportScores && !canManageExams
+                        ? '🔒 Bị khóa: Bạn chỉ có quyền Xem/Lọc điểm, không có quyền bổ sung thí sinh vào CSDL'
+                        : 'Bổ sung thí sinh thi bù hoặc đính chính điểm trực tiếp không cần tải lại file'
+                    }
+                  >
+                    {!canImportScores && !canManageExams ? <Lock className="w-3.5 h-3.5 text-slate-500" /> : <Plus className="w-3.5 h-3.5" />}
+                    <span>+ Thêm Thí sinh thi bù</span>
+                  </button>
                 </div>
               </div>
 
@@ -1424,7 +1835,7 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                         <th className="py-2.5 px-3">Các môn đã dự thi</th>
                         <th className="py-2.5 px-3 text-center">Bài thi scan</th>
                         <th className="py-2.5 px-3 text-right">Điểm TB</th>
-                        <th className="py-2.5 px-3 text-right w-16">Xóa</th>
+                        <th className="py-2.5 px-3 text-right w-20">Thao tác</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-mono">
@@ -1514,14 +1925,54 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                               </td>
                               <td className="py-2 px-3 text-right">
                                 {r.id && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteScore(r.id!, r.full_name)}
-                                    className="p-1 text-slate-300 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                                    title="Xóa bài thi"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button
+                                      type="button"
+                                      disabled={!canImportScores && !canManageExams}
+                                      onClick={() => {
+                                        if (!canImportScores && !canManageExams) {
+                                          showToast('🔒 Bị khóa: Bạn không có quyền sửa điểm thí sinh (cần quyền CSDL_IMPORT_DIEM hoặc CSDL_QUAN_LY_KY_THI).', 'error');
+                                          return;
+                                        }
+                                        handleOpenEditStudent(r);
+                                      }}
+                                      className={`p-1 rounded transition-colors ${
+                                        !canImportScores && !canManageExams
+                                          ? 'text-slate-300 cursor-not-allowed opacity-25'
+                                          : 'text-blue-600 hover:text-blue-800 hover:bg-blue-50 cursor-pointer'
+                                      }`}
+                                      title={
+                                        !canImportScores && !canManageExams
+                                          ? '🔒 Bị khóa: Bạn chỉ có quyền Xem/Lọc điểm, không có quyền sửa điểm CSDL'
+                                          : 'Sửa điểm học sinh / Phúc khảo'
+                                      }
+                                    >
+                                      <Edit3 className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={!canImportScores && !canManageExams}
+                                      onClick={() => {
+                                        if (!canImportScores && !canManageExams) {
+                                          showToast('🔒 Bị khóa: Bạn không có quyền xóa dữ liệu bài thi trên CSDL.', 'error');
+                                          return;
+                                        }
+                                        handleDeleteScore(r.id!, r.full_name);
+                                      }}
+                                      className={`p-1 rounded transition-colors ${
+                                        !canImportScores && !canManageExams
+                                          ? 'text-slate-300 cursor-not-allowed opacity-25'
+                                          : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer'
+                                      }`}
+                                      title={
+                                        !canImportScores && !canManageExams
+                                          ? '🔒 Bị khóa: Bạn chỉ có quyền Xem/Lọc điểm, không có quyền xóa bài thi CSDL'
+                                          : 'Xóa bài thi'
+                                      }
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
                                 )}
                               </td>
                             </tr>
@@ -1539,6 +1990,23 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
           {activeTab === 'paper_images' && (
             <div className="space-y-6">
               
+              {/* Cảnh báo khi người dùng không có quyền nạp/xóa ảnh bài thi */}
+              {!canSyncImages && (
+                <div className="p-4 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-950 flex items-start gap-3 shadow-xs">
+                  <div className="p-1.5 bg-amber-200/80 rounded-xl text-amber-900 shrink-0 mt-0.5">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <div className="font-bold text-amber-900 text-sm">
+                      Chức năng Nạp & Quản lý Ảnh đang ở trạng thái Khóa (Chỉ xem đối soát):
+                    </div>
+                    <div className="text-amber-800 leading-relaxed">
+                      Tài khoản của Thầy/Cô chỉ có quyền <strong>Xem và đối soát ảnh bài thi scan</strong> của học sinh. Thao tác tải ảnh mới lên hoặc xóa ảnh trên Supabase Storage yêu cầu quyền <code>CSDL_DONG_BO_ANH</code> (dành riêng cho Quản trị viên / Ban Giám hiệu / Giáo vụ).
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Header điều hướng kỳ thi & Thống kê tổng quan */}
               <div className="bg-gradient-to-r from-indigo-50 via-blue-50 to-slate-50 p-4 rounded-xl border border-indigo-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="space-y-1">
@@ -1558,12 +2026,27 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
                     type="button"
-                    disabled={isSyncingStorage}
-                    onClick={handleSyncStoragePapers}
-                    className="px-3.5 py-2 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
-                    title="Quét toàn bộ ảnh trong các Bucket Storage trên Supabase và liên kết tự động vào hồ sơ thí sinh"
+                    disabled={isSyncingStorage || !canSyncImages}
+                    onClick={() => {
+                      if (!canSyncImages) {
+                        showToast('🔒 Bị khóa: Bạn không có quyền đồng bộ ảnh từ Storage.', 'error');
+                        return;
+                      }
+                      handleSyncStoragePapers();
+                    }}
+                    className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all ${
+                      !canSyncImages
+                        ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                        : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:opacity-50 text-white cursor-pointer'
+                    }`}
+                    title={!canSyncImages ? '🔒 Bị khóa: Cần quyền CSDL_DONG_BO_ANH' : 'Quét toàn bộ ảnh trong các Bucket Storage trên Supabase và liên kết tự động vào hồ sơ thí sinh'}
                   >
-                    {isSyncingStorage ? (
+                    {!canSyncImages ? (
+                      <>
+                        <Lock className="w-3.5 h-3.5 text-slate-500" />
+                        <span>🔒 Khóa đồng bộ Storage</span>
+                      </>
+                    ) : isSyncingStorage ? (
                       <>
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                         <span>Đang đồng bộ từ Storage...</span>
@@ -1983,22 +2466,44 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                   {paperUploadMode === 'folder' ? (
                     <button
                       type="button"
-                      onClick={() => folderInputRef.current?.click()}
-                      disabled={isProcessingFiles || isUploadingPapers}
-                      className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-md shadow-indigo-600/20 transition-all cursor-pointer hover:scale-[1.02]"
+                      onClick={() => {
+                        if (!canSyncImages) {
+                          showToast('🔒 Bị khóa: Bạn không có quyền nạp ảnh bài thi.', 'error');
+                          return;
+                        }
+                        folderInputRef.current?.click();
+                      }}
+                      disabled={isProcessingFiles || isUploadingPapers || !canSyncImages}
+                      className={`px-6 py-3 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                        !canSyncImages
+                          ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300 shadow-none'
+                          : 'bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-700 hover:to-blue-700 text-white shadow-md shadow-indigo-600/20 cursor-pointer hover:scale-[1.02]'
+                      }`}
+                      title={!canSyncImages ? '🔒 Bị khóa: Cần quyền CSDL_DONG_BO_ANH' : 'Chọn Thư mục ảnh bài thi'}
                     >
-                      <FolderUp className="w-4 h-4" />
-                      <span>Chọn Thư mục ảnh bài thi (Folder Upload)</span>
+                      {!canSyncImages ? <Lock className="w-4 h-4 text-slate-500" /> : <FolderUp className="w-4 h-4" />}
+                      <span>{!canSyncImages ? '🔒 Khóa nạp ảnh (Chỉ xem)' : 'Chọn Thư mục ảnh bài thi (Folder Upload)'}</span>
                     </button>
                   ) : (
                     <button
                       type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isProcessingFiles || isUploadingPapers}
-                      className="px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-md shadow-blue-600/20 transition-all cursor-pointer hover:scale-[1.02]"
+                      onClick={() => {
+                        if (!canSyncImages) {
+                          showToast('🔒 Bị khóa: Bạn không có quyền nạp ảnh bài thi.', 'error');
+                          return;
+                        }
+                        fileInputRef.current?.click();
+                      }}
+                      disabled={isProcessingFiles || isUploadingPapers || !canSyncImages}
+                      className={`px-6 py-3 rounded-xl text-xs font-bold flex items-center gap-2 transition-all ${
+                        !canSyncImages
+                          ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300 shadow-none'
+                          : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-md shadow-blue-600/20 cursor-pointer hover:scale-[1.02]'
+                      }`}
+                      title={!canSyncImages ? '🔒 Bị khóa: Cần quyền CSDL_DONG_BO_ANH' : 'Chọn nhiều tệp ảnh bài thi'}
                     >
-                      <Upload className="w-4 h-4" />
-                      <span>Chọn nhiều tệp ảnh bài thi môn {customSubjectInput.trim() || selectedPaperSubject}</span>
+                      {!canSyncImages ? <Lock className="w-4 h-4 text-slate-500" /> : <Upload className="w-4 h-4" />}
+                      <span>{!canSyncImages ? '🔒 Khóa nạp ảnh (Chỉ xem)' : `Chọn nhiều tệp ảnh bài thi môn ${customSubjectInput.trim() || selectedPaperSubject}`}</span>
                     </button>
                   )}
                 </div>
@@ -2034,8 +2539,12 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                         <button
                           type="button"
                           onClick={handleStartUploadPapers}
-                          disabled={isUploadingPapers || stagedPapers.filter(p => p.status === 'ready').length === 0}
-                          className="px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                          disabled={isUploadingPapers || stagedPapers.filter(p => p.status === 'ready').length === 0 || !canSyncImages}
+                          className={`px-4 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all ${
+                            !canSyncImages
+                              ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                              : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white cursor-pointer'
+                          }`}
                         >
                           {isUploadingPapers ? (
                             <>
@@ -2150,10 +2659,20 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                     {gallerySubjectFilter !== 'all' && (
                       <button
                         type="button"
-                        disabled={isDeletingPapers}
-                        onClick={() => handleDeleteAllPapersOfSubject(gallerySubjectFilter)}
-                        className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 disabled:opacity-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
-                        title={`Xóa toàn bộ ảnh bài thi môn ${gallerySubjectFilter}`}
+                        disabled={isDeletingPapers || !canSyncImages}
+                        onClick={() => {
+                          if (!canSyncImages) {
+                            showToast('🔒 Bị khóa: Bạn không có quyền xóa ảnh bài thi.', 'error');
+                            return;
+                          }
+                          handleDeleteAllPapersOfSubject(gallerySubjectFilter);
+                        }}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors ${
+                          !canSyncImages
+                            ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-40'
+                            : 'bg-rose-50 hover:bg-rose-100 disabled:opacity-50 text-rose-700 border border-rose-200 cursor-pointer'
+                        }`}
+                        title={!canSyncImages ? '🔒 Bị khóa: Không có quyền xóa ảnh bài thi' : `Xóa toàn bộ ảnh bài thi môn ${gallerySubjectFilter}`}
                       >
                         {isDeletingPapers ? (
                           <>
@@ -2267,9 +2786,20 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                                 </a>
                                 <button
                                   type="button"
-                                  onClick={() => handleDeleteStudentPaper(item.sbd, item.subject, item.fullName)}
-                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                                  title="Xóa ảnh bài thi này"
+                                  disabled={!canSyncImages}
+                                  onClick={() => {
+                                    if (!canSyncImages) {
+                                      showToast('🔒 Bị khóa: Bạn không có quyền xóa ảnh bài thi.', 'error');
+                                      return;
+                                    }
+                                    handleDeleteStudentPaper(item.sbd, item.subject, item.fullName);
+                                  }}
+                                  className={`p-1.5 rounded-lg transition-colors ${
+                                    !canSyncImages
+                                      ? 'text-slate-300 cursor-not-allowed opacity-25'
+                                      : 'text-slate-400 hover:text-rose-600 cursor-pointer'
+                                  }`}
+                                  title={!canSyncImages ? '🔒 Bị khóa: Không có quyền xóa ảnh bài thi' : 'Xóa ảnh bài thi này'}
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -2286,9 +2816,27 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
             </div>
           )}
 
-          {/* TAB 3: QUẢN LÝ KỲ THI & CÔNG BỐ */}
+          {/* TAB 4: QUẢN LÝ KỲ THI & CÔNG BỐ */}
           {activeTab === 'exams' && (
             <div className="space-y-4">
+              
+              {/* Cảnh báo khi người dùng không có quyền quản lý kỳ thi */}
+              {!canManageExams && (
+                <div className="p-4 bg-amber-50 border border-amber-300 rounded-2xl text-xs text-amber-950 flex items-start gap-3 shadow-xs">
+                  <div className="p-1.5 bg-amber-200/80 rounded-xl text-amber-900 shrink-0 mt-0.5">
+                    <Lock className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <div className="font-bold text-amber-900 text-sm">
+                      Chức năng Quản lý Kỳ thi đang ở trạng thái Khóa (Chỉ xem):
+                    </div>
+                    <div className="text-amber-800 leading-relaxed">
+                      Tài khoản của Thầy/Cô chỉ có thẩm quyền <strong>Xem danh sách đợt thi & trạng thái công bố</strong>. Thao tác Tạo mới, Xóa kỳ thi hoặc Bật/Tắt công bố kết quả yêu cầu quyền <code>CSDL_QUAN_LY_KY_THI</code> (chỉ dành cho Quản trị viên / Ban Giám hiệu / Giáo vụ).
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">Quản lý Đợt thi & Trạng thái Công bố Tra cứu</h3>
@@ -2298,10 +2846,22 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowCreateExamForm(true)}
-                  className="px-3.5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm shrink-0"
+                  disabled={!canManageExams}
+                  onClick={() => {
+                    if (!canManageExams) {
+                      showToast('🔒 Bị khóa: Bạn không có quyền tạo kỳ thi mới.', 'error');
+                      return;
+                    }
+                    setShowCreateExamForm(true);
+                  }}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-sm shrink-0 ${
+                    !canManageExams
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white cursor-pointer'
+                  }`}
+                  title={!canManageExams ? '🔒 Bị khóa: Cần quyền CSDL_QUAN_LY_KY_THI' : 'Tạo kỳ thi mới'}
                 >
-                  <Plus className="w-4 h-4" />
+                  {!canManageExams ? <Lock className="w-3.5 h-3.5 text-slate-500" /> : <Plus className="w-4 h-4" />}
                   <span>+ Tạo kỳ thi mới</span>
                 </button>
               </div>
@@ -2360,13 +2920,26 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                           <td className="py-3 px-3 text-center">
                             <button
                               type="button"
-                              onClick={() => handleTogglePublish(ex)}
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all cursor-pointer ${
-                                ex.is_published
-                                  ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300'
-                                  : 'bg-slate-200 text-slate-600 hover:bg-slate-300 border border-slate-300'
+                              disabled={!canManageExams}
+                              onClick={() => {
+                                if (!canManageExams) {
+                                  showToast('🔒 Bị khóa: Bạn không có quyền thay đổi trạng thái công bố.', 'error');
+                                  return;
+                                }
+                                handleTogglePublish(ex);
+                              }}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${
+                                !canManageExams
+                                  ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                                  : ex.is_published
+                                    ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300 cursor-pointer'
+                                    : 'bg-slate-200 text-slate-600 hover:bg-slate-300 border border-slate-300 cursor-pointer'
                               }`}
-                              title={ex.is_published ? 'Bấm để Tạm ẩn tra cứu' : 'Bấm để Mở công bố tra cứu'}
+                              title={
+                                !canManageExams
+                                  ? '🔒 Bị khóa: Không có quyền đổi trạng thái công bố'
+                                  : ex.is_published ? 'Bấm để Tạm ẩn tra cứu' : 'Bấm để Mở công bố tra cứu'
+                              }
                             >
                               <span className={`w-2 h-2 rounded-full ${ex.is_published ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                               <span>{ex.is_published ? 'Đang công bố' : 'Tạm ẩn'}</span>
@@ -2375,12 +2948,21 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                           <td className="py-3 px-3 text-right space-x-1.5 whitespace-nowrap">
                             <button
                               type="button"
+                              disabled={!canImportScores}
                               onClick={() => {
+                                if (!canImportScores) {
+                                  showToast('🔒 Bị khóa: Bạn không có quyền nạp điểm.', 'error');
+                                  return;
+                                }
                                 setSelectedExamId(ex.id);
                                 setActiveTab('upload');
                               }}
-                              className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
-                              title="Chuyển sang tab Nạp file bảng điểm"
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                                !canImportScores
+                                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-40'
+                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 cursor-pointer'
+                              }`}
+                              title={!canImportScores ? '🔒 Bị khóa quyền nạp điểm' : 'Chuyển sang tab Nạp file bảng điểm'}
                             >
                               Nạp điểm
                             </button>
@@ -2396,9 +2978,20 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleDeleteExam(ex.id, ex.title)}
-                              className="p-1 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                              title="Xóa kỳ thi"
+                              disabled={!canManageExams}
+                              onClick={() => {
+                                if (!canManageExams) {
+                                  showToast('🔒 Bị khóa: Bạn không có quyền xóa kỳ thi.', 'error');
+                                  return;
+                                }
+                                handleDeleteExam(ex.id, ex.title);
+                              }}
+                              className={`p-1 rounded-lg transition-colors ${
+                                !canManageExams
+                                  ? 'text-slate-300 cursor-not-allowed opacity-25'
+                                  : 'text-slate-400 hover:text-rose-600 cursor-pointer'
+                              }`}
+                              title={!canManageExams ? '🔒 Bị khóa: Không có quyền xóa kỳ thi' : 'Xóa kỳ thi'}
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -2412,46 +3005,60 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
             </div>
           )}
 
-          {/* TAB 4: HƯỚNG DẪN SQL CHO SUPABASE */}
+          {/* TAB 5: HƯỚNG DẪN SQL CHO SUPABASE (CHỈ DÀNH CHO ADMIN) */}
           {activeTab === 'sql_guide' && (
             <div className="space-y-4">
-              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-xs text-indigo-900 space-y-2">
-                <div className="font-bold flex items-center gap-2 text-sm text-indigo-950">
-                  <Terminal className="w-4 h-4 text-indigo-600" />
-                  <span>3 Bước khởi tạo bảng Tra cứu Điểm Đa Môn trên Supabase:</span>
+              {!canViewSql ? (
+                <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                  <div className="w-12 h-12 bg-amber-100 text-amber-800 rounded-full mx-auto flex items-center justify-center shadow-inner">
+                    <Lock className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-800">Mã SQL CSDL Supabase đang bị khóa</h3>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto leading-relaxed">
+                    Khu vực này chứa mã DDL khởi tạo bảng và script cấu hình bảo mật trực tiếp trên máy chủ CSDL Supabase Cloud. Chức năng này chỉ dành riêng cho <strong>Quản trị viên hệ thống (Admin)</strong>.
+                  </p>
                 </div>
-                <ol className="list-decimal pl-5 space-y-1 leading-relaxed">
-                  <li>Đăng nhập <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="underline font-bold">Supabase Dashboard</a> và mở Project trường của Thầy/Cô.</li>
-                  <li>Nhìn sang cột menu bên trái, chọn mục <strong>SQL Editor</strong> rồi bấm <strong>New query</strong>.</li>
-                  <li>Bấm nút <strong>"Copy toàn bộ mã SQL"</strong> bên dưới, dán vào ô soạn thảo rồi bấm nút <strong>RUN</strong>.</li>
-                </ol>
-              </div>
+              ) : (
+                <>
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 text-xs text-indigo-900 space-y-2">
+                    <div className="font-bold flex items-center gap-2 text-sm text-indigo-950">
+                      <Terminal className="w-4 h-4 text-indigo-600" />
+                      <span>3 Bước khởi tạo bảng Tra cứu Điểm Đa Môn trên Supabase:</span>
+                    </div>
+                    <ol className="list-decimal pl-5 space-y-1 leading-relaxed">
+                      <li>Đăng nhập <a href="https://supabase.com/dashboard" target="_blank" rel="noreferrer" className="underline font-bold">Supabase Dashboard</a> và mở Project trường của Thầy/Cô.</li>
+                      <li>Nhìn sang cột menu bên trái, chọn mục <strong>SQL Editor</strong> rồi bấm <strong>New query</strong>.</li>
+                      <li>Bấm nút <strong>"Copy toàn bộ mã SQL"</strong> bên dưới, dán vào ô soạn thảo rồi bấm nút <strong>RUN</strong>.</li>
+                    </ol>
+                  </div>
 
-              <div className="relative">
-                <div className="flex items-center justify-between bg-slate-800 text-slate-300 px-4 py-2 rounded-t-xl text-xs font-mono">
-                  <span>supabase_schema_score_lookup.sql</span>
-                  <button
-                    type="button"
-                    onClick={copySqlCode}
-                    className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-sans font-semibold transition-colors cursor-pointer"
-                  >
-                    {copiedSql ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-300" />
-                        <span>Đã copy vào bộ nhớ tạm!</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5" />
-                        <span>Copy toàn bộ mã SQL</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-                <pre className="bg-slate-900 text-emerald-400 p-4 rounded-b-xl text-[11px] font-mono overflow-x-auto max-h-[45vh] leading-relaxed border-t border-slate-700">
-                  {supabaseSqlScript}
-                </pre>
-              </div>
+                  <div className="relative">
+                    <div className="flex items-center justify-between bg-slate-800 text-slate-300 px-4 py-2 rounded-t-xl text-xs font-mono">
+                      <span>supabase_schema_score_lookup.sql</span>
+                      <button
+                        type="button"
+                        onClick={copySqlCode}
+                        className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-sans font-semibold transition-colors cursor-pointer"
+                      >
+                        {copiedSql ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-300" />
+                            <span>Đã copy vào bộ nhớ tạm!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>Copy toàn bộ mã SQL</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <pre className="bg-slate-900 text-emerald-400 p-4 rounded-b-xl text-[11px] font-mono overflow-x-auto max-h-[45vh] leading-relaxed border-t border-slate-700">
+                      {supabaseSqlScript}
+                    </pre>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -2576,10 +3183,19 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                 </button>
                 <button
                   type="submit"
-                  disabled={isSavingExam}
-                  className="px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-500/20 cursor-pointer flex items-center gap-1.5"
+                  disabled={isSavingExam || !canManageExams}
+                  className={`px-5 py-2 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 ${
+                    !canManageExams
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300 shadow-none'
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-blue-500/20 cursor-pointer'
+                  }`}
                 >
-                  {isSavingExam ? (
+                  {!canManageExams ? (
+                    <>
+                      <Lock className="w-3.5 h-3.5 text-slate-500" />
+                      <span>🔒 Không có quyền tạo kỳ thi</span>
+                    </>
+                  ) : isSavingExam ? (
                     <>
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                       <span>Đang lưu...</span>
@@ -2588,6 +3204,225 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
                     <>
                       <Cloud className="w-3.5 h-3.5" />
                       <span>Lưu kỳ thi lên CSDL</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP CHỈNH SỬA ĐIỂM HOẶC BỔ SUNG THÍ SINH THI BÙ */}
+      {(editingStudent || isCreatingStudent) && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full overflow-hidden animate-in fade-in zoom-in duration-150 flex flex-col max-h-[90vh]">
+            <div className="px-5 py-3.5 bg-gradient-to-r from-blue-700 via-indigo-700 to-indigo-800 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-amber-300" />
+                <div>
+                  <h3 className="font-bold text-sm">
+                    {isCreatingStudent ? 'Bổ sung Thí sinh thi bù / Phúc khảo' : `Chỉnh sửa điểm: ${editFullName || editSbd}`}
+                  </h3>
+                  <p className="text-[11px] text-blue-100 opacity-90">
+                    Cập nhật đồng bộ Supabase Cloud & tự động tính lại Điểm Trung Bình
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingStudent(null);
+                  setIsCreatingStudent(false);
+                  setEditScoreError(null);
+                }}
+                className="p-1 text-white/80 hover:text-white rounded-lg cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveStudentScore} className="p-5 overflow-y-auto space-y-4 text-xs text-slate-800 flex-1">
+              {editScoreError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl flex items-center gap-2 text-xs font-semibold">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{editScoreError}</span>
+                </div>
+              )}
+
+              {/* Thông tin định danh học sinh */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                <div className="font-bold text-slate-700 text-xs flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-blue-600" />
+                  <span>Thông tin Thí sinh</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Số báo danh (SBD) (*):
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={editSbd}
+                      onChange={(e) => setEditSbd(e.target.value)}
+                      placeholder="VD: 52830001"
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono font-bold text-blue-700 text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Họ và tên thí sinh (*):
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={editFullName}
+                      onChange={(e) => setEditFullName(e.target.value)}
+                      placeholder="VD: Nguyễn Văn An"
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-semibold focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Lớp:
+                    </label>
+                    <input
+                      type="text"
+                      value={editClassName}
+                      onChange={(e) => setEditClassName(e.target.value)}
+                      placeholder="VD: 12A1"
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-semibold focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Số CCCD / Mã định danh:
+                    </label>
+                    <input
+                      type="text"
+                      value={editCccd}
+                      onChange={(e) => setEditCccd(e.target.value)}
+                      placeholder="VD: 038209001234"
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 font-mono text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Ngày sinh (Tùy chọn):
+                    </label>
+                    <input
+                      type="text"
+                      value={editDob}
+                      onChange={(e) => setEditDob(e.target.value)}
+                      placeholder="VD: 15/08/2008"
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs focus:ring-2 focus:ring-blue-600 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Điểm các môn thi */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-slate-700 text-xs flex items-center gap-1.5">
+                    <BookOpen className="w-4 h-4 text-indigo-600" />
+                    <span>Điểm các môn thi ({editSubjectScores.length} môn)</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddSubjectRow}
+                    className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Thêm môn thi</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {editSubjectScores.map((row, idx) => (
+                    <div key={idx} className="flex items-center gap-2 bg-white p-2 rounded-lg border border-slate-200">
+                      <input
+                        type="text"
+                        value={row.subject}
+                        onChange={(e) => handleSubjectScoreChange(idx, 'subject', e.target.value)}
+                        placeholder="Tên môn thi"
+                        className="flex-1 bg-slate-50 border border-slate-200 rounded px-2 py-1 text-xs font-bold text-slate-800 focus:bg-white focus:outline-none"
+                      />
+                      <div className="w-24">
+                        <input
+                          type="number"
+                          step="0.05"
+                          min="0"
+                          max="10"
+                          value={row.score}
+                          onChange={(e) => handleSubjectScoreChange(idx, 'score', e.target.value)}
+                          placeholder="Điểm (0-10)"
+                          className="w-full bg-blue-50/50 border border-blue-200 rounded px-2 py-1 text-xs font-mono font-bold text-blue-900 focus:bg-white focus:outline-none text-right"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveSubjectRow(idx)}
+                        disabled={editSubjectScores.length <= 1}
+                        className="p-1 text-slate-400 hover:text-rose-600 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                        title="Xóa môn này"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Khung tóm tắt tính toán tự động Điểm TB */}
+                <div className="p-3 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-200 flex items-center justify-between">
+                  <div className="text-xs text-blue-900">
+                    <span className="font-bold">Tổng số môn:</span>{' '}
+                    <span className="font-mono font-bold">{calculatedPreviewStats.count} môn</span>
+                    <span className="mx-2 text-slate-300">|</span>
+                    <span className="font-bold">Tổng điểm:</span>{' '}
+                    <span className="font-mono font-bold">{calculatedPreviewStats.total}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] text-blue-700 font-bold uppercase block">Điểm TB tự động:</span>
+                    <span className="text-base font-black text-indigo-900 font-mono">
+                      {calculatedPreviewStats.average}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingStudent(null);
+                    setIsCreatingStudent(false);
+                    setEditScoreError(null);
+                  }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingStudentScore || (!canImportScores && !canManageExams)}
+                  className="px-5 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-500/20 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingStudentScore ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Đang lưu lên Supabase...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>{isCreatingStudent ? 'Lưu Thí sinh mới' : 'Cập nhật điểm'}</span>
                     </>
                   )}
                 </button>
@@ -2701,6 +3536,17 @@ GRANT EXECUTE ON FUNCTION public.lookup_student_score(UUID, TEXT, TEXT) TO servi
           </div>
         </div>
       )}
+
+      {/* MODAL LỌC DANH SÁCH PHỤ ĐẠO / BỒI DƯỠNG */}
+      <FilterRemedialStudentsModal
+        isOpen={showRemedialFilterModal}
+        onClose={() => setShowRemedialFilterModal(false)}
+        examTitle={exams.find(e => e.id === selectedExamId)?.title || 'Kỳ thi'}
+        academicYear={exams.find(e => e.id === selectedExamId)?.academic_year || activeSchoolYear}
+        students={examResults}
+        availableSubjects={detectedExamSubjects}
+        availableClasses={uniqueClasses}
+      />
     </div>
   );
 };

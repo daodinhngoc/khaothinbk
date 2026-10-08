@@ -42,10 +42,18 @@ function downloadBlob(blob: Blob, filename: string) {
  */
 export function sortCandidatesInRoomForShift(
   candidates: CandidateAssigned[],
-  subjectKey?: 'TC1' | 'TC2' | 'M1' | 'M2' | 'ToHop_ChuanHoa' | string
+  subjectKey?: 'TC1' | 'TC2' | 'M1' | 'M2' | 'ToHop_ChuanHoa' | string,
+  sortSbdAscending?: boolean
 ): CandidateAssigned[] {
   return [...candidates].sort((a, b) => {
-    // 1. Phân nhóm môn / tổ hợp trong phòng nếu không phải môn bắt buộc chung
+    // Nếu bật công tắc: Sắp xếp số báo danh trong phòng thi tăng dần (Phương án 2)
+    if (sortSbdAscending) {
+      const sbdA = String(a.SBD || '').trim();
+      const sbdB = String(b.SBD || '').trim();
+      return sbdA.localeCompare(sbdB, undefined, { numeric: true, sensitivity: 'base' });
+    }
+
+    // Mặc định (khi tắt công tắc): Phân nhóm môn / tổ hợp trong phòng nếu không phải môn bắt buộc chung
     if (subjectKey && subjectKey !== 'M1' && subjectKey !== 'M2' && subjectKey !== 'Ngữ văn' && subjectKey !== 'Toán') {
       let subjA = '';
       let subjB = '';
@@ -62,7 +70,7 @@ export function sortCandidatesInRoomForShift(
       }
     }
 
-    // 2. Trong cùng môn / tổ hợp: Sắp xếp SBD từ nhỏ đến lớn
+    // Trong cùng môn / tổ hợp: Sắp xếp SBD từ nhỏ đến lớn
     const sbdA = String(a.SBD || '').trim();
     const sbdB = String(b.SBD || '').trim();
     return sbdA.localeCompare(sbdB, undefined, { numeric: true, sensitivity: 'base' });
@@ -208,7 +216,7 @@ export async function exportAttendanceSheetsExcel(
   const sortedRooms = Array.from(roomsMap.keys()).sort((a, b) => a - b);
 
   sortedRooms.forEach((roomNo) => {
-    const roomCandidates = sortCandidatesInRoomForShift(roomsMap.get(roomNo) || [], subjectKey);
+    const roomCandidates = sortCandidatesInRoomForShift(roomsMap.get(roomNo) || [], subjectKey, config.sortSbdAscendingInRoom ?? true);
     const roomCode = getRoomCode(roomNo, config.startRoomCode);
     const sheetTitle = `P_${roomCode.replace(/[^a-zA-Z0-9_-]/g, '_')}`.slice(0, 31);
     const ws = workbook.addWorksheet(sheetTitle, {
@@ -1134,7 +1142,7 @@ export async function exportCompulsoryAttendanceExcel(
   const sortedRooms = Array.from(roomsMap.keys()).sort((a, b) => a - b);
 
   sortedRooms.forEach((roomNo) => {
-    const roomCandidates = sortCandidatesInRoomForShift(roomsMap.get(roomNo) || [], 'M1');
+    const roomCandidates = sortCandidatesInRoomForShift(roomsMap.get(roomNo) || [], 'M1', config.sortSbdAscendingInRoom ?? true);
     const roomCode = getRoomCode(roomNo, config.startRoomCode);
     const sheetTitle = `P_${roomCode.replace(/[^a-zA-Z0-9_-]/g, '_')}`.slice(0, 31);
     const ws = workbook.addWorksheet(sheetTitle, {
@@ -1897,7 +1905,7 @@ export async function exportMOETFixedRoomsAttendanceExcel(
   const sortedRooms = Array.from(roomsMap.keys()).sort((a, b) => a - b);
 
   sortedRooms.forEach((rNo) => {
-    const roomCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa');
+    const roomCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa', config.sortSbdAscendingInRoom ?? true);
     const roomCode = getRoomCode(rNo, config.startRoomCode);
     const sheetTitle = `P_${roomCode.replace(/[^a-zA-Z0-9_-]/g, '_')}`.slice(0, 31);
 
@@ -2216,7 +2224,7 @@ export async function exportSeatingChartAllRoomsExcel(
 
   let masterRowCounter = 1;
   sortedRooms.forEach(rNo => {
-    const rCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa');
+    const rCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa', config.sortSbdAscendingInRoom ?? true);
     const desks = computeRoomDeskMatrix(rCandidates, pattern);
     const roomCode = getRoomCode(rNo, config.startRoomCode);
 
@@ -2281,7 +2289,7 @@ export async function exportSeatingChartAllRoomsExcel(
 
   // 2. CÁC SHEET SƠ ĐỒ BỐ TRÍ TỪNG PHÒNG THI (Mỗi phòng 1 sheet A4 Dọc)
   sortedRooms.forEach((rNo) => {
-    const rCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa');
+    const rCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa', config.sortSbdAscendingInRoom ?? true);
     const roomCode = getRoomCode(rNo, config.startRoomCode);
     const sheetName = `SoDo_P${String(rNo).padStart(2, '0')}`;
 
@@ -2511,7 +2519,7 @@ export async function exportDeskLabelsExcel(
 
   let globalIdx = 1;
   sortedRooms.forEach(rNo => {
-    const rCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa');
+    const rCandidates = sortCandidatesInRoomForShift(roomsMap.get(rNo) || [], 'ToHop_ChuanHoa', config.sortSbdAscendingInRoom ?? true);
     rCandidates.forEach((cand, candInRoomIdx) => {
       const row = ws.addRow({
         tt: globalIdx++,

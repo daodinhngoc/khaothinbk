@@ -183,7 +183,8 @@ export const PrintA4Preview: React.FC<PrintA4PreviewProps> = ({
           {roomsToRender.map((rNo) => {
             const rCandidates = sortCandidatesInRoomForShift(
               effectiveCandidates.filter((c: CandidateAssigned) => c['Phòng thi'] === rNo),
-              isCompulsory ? 'M1' : subjectKey
+              isCompulsory ? 'M1' : subjectKey,
+              config.sortSbdAscendingInRoom ?? true
             );
             const uniqueSubjsList = isCompulsory
               ? [shift]

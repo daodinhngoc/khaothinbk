@@ -56,6 +56,7 @@ export interface ExamConfig {
   locationName?: string;     // Địa danh (nếu cần ghép vào dateLine tự động)
   leaderTitle?: string;      // Mặc định 'TRƯỞNG ĐIỂM THI' / 'HIỆU TRƯỞNG', để trống = ẩn cả chữ ký
   balanceRoomsInGroup?: boolean; // Tự động chia đều sĩ số các phòng trong cùng nhóm (tránh phòng cuối bị quá ít)
+  sortSbdAscendingInRoom?: boolean; // Phương án 2: Công tắc linh hoạt sắp xếp SBD trong phòng thi tăng dần liên tục (1..24)
 }
 
 export const COMPULSORY_SUBJECTS = ['Ngữ văn', 'Toán', 'Lịch sử', 'Tiếng Anh'];
@@ -139,6 +140,136 @@ export interface ExamPaperMatrix {
 export type UserRole = 'Admin' | 'BanGiamHieu' | 'GiaoVu' | 'ToTruong' | 'GiaoVien';
 
 /**
+ * Danh sách mã định danh quyền chức năng chi tiết
+ */
+export type UserPermission =
+  | 'PHAN_HE_1_XEP_PHONG'       // Phân hệ 1: Xếp phòng thi & Xuất biểu mẫu A4/Excel
+  | 'PHAN_HE_2_GIAM_THI'        // Phân hệ 2: Phân công Hội đồng & Giám thị coi thi
+  | 'PHAN_HE_3_KHAO_THI'        // Phân hệ 3: Bảng điểm & AI Khảo thí GDPT 2018
+  | 'KHAO_THI_TOAN_TRUONG'      // Xem dữ liệu khảo thí toàn trường (tất cả các môn)
+  | 'CSDL_QUAN_LY_KY_THI'       // Quản lý kỳ thi, công bố kết quả tra cứu
+  | 'CSDL_IMPORT_DIEM'          // Import điểm chi tiết máy chấm từ Excel
+  | 'CSDL_DONG_BO_ANH'          // Quét và đồng bộ ảnh bài thi scan từ Storage
+  | 'CSDL_XUAT_BAO_CAO'         // Xuất bảng thống kê phổ điểm đa sheet & danh sách phụ đạo
+  | 'QUAN_TRI_TAI_KHOAN';       // Cấp mới tài khoản, phân quyền, cấu hình hệ thống
+
+export interface PermissionDefinition {
+  id: UserPermission;
+  category: 'Cốt lõi' | 'Khảo thí' | 'CSDL Tra cứu' | 'Hệ thống';
+  label: string;
+  description: string;
+}
+
+export const ALL_PERMISSIONS: PermissionDefinition[] = [
+  {
+    id: 'PHAN_HE_1_XEP_PHONG',
+    category: 'Cốt lõi',
+    label: '1. Xếp phòng thi & Biểu mẫu A4',
+    description: 'Nạp danh sách thí sinh, thuật toán Rolling-Fit 2.0, xuất phiếu thu bài A4, sơ đồ chỗ ngồi, thẻ dán bàn.'
+  },
+  {
+    id: 'PHAN_HE_2_GIAM_THI',
+    category: 'Cốt lõi',
+    label: '2. Phân công Hội đồng & Giám thị',
+    description: 'Quản lý cán bộ coi thi, chạy thuật toán cân đối ca, in phương án & quyết định coi thi.'
+  },
+  {
+    id: 'PHAN_HE_3_KHAO_THI',
+    category: 'Cốt lõi',
+    label: '3. Bảng điểm & AI Khảo thí',
+    description: 'Xem bảng điểm môn học, nạp ma trận YCCĐ, chỉ số P&D câu hỏi, trợ lý AI Khảo thí sư phạm.'
+  },
+  {
+    id: 'KHAO_THI_TOAN_TRUONG',
+    category: 'Khảo thí',
+    label: 'Khảo thí phạm vi Toàn trường',
+    description: 'Xem phổ điểm & phân tích tất cả các môn toàn trường (nếu tắt thì chỉ xem môn theo Tổ / Chuyên môn).'
+  },
+  {
+    id: 'CSDL_QUAN_LY_KY_THI',
+    category: 'CSDL Tra cứu',
+    label: 'Quản lý & Công bố Kỳ thi',
+    description: 'Tạo mới kỳ thi, chỉnh sửa thông tin, bật/tắt công bố tra cứu điểm cho học sinh.'
+  },
+  {
+    id: 'CSDL_IMPORT_DIEM',
+    category: 'CSDL Tra cứu',
+    label: 'Nạp điểm Excel máy chấm',
+    description: 'Tải file Excel điểm chi tiết máy chấm nạp vào CSDL Supabase.'
+  },
+  {
+    id: 'CSDL_DONG_BO_ANH',
+    category: 'CSDL Tra cứu',
+    label: 'Đồng bộ ảnh bài thi scan',
+    description: 'Quét và đối soát tự động toàn bộ ảnh bài thi scan từ Supabase Storage.'
+  },
+  {
+    id: 'CSDL_XUAT_BAO_CAO',
+    category: 'CSDL Tra cứu',
+    label: 'Xuất Báo cáo & Lọc phụ đạo',
+    description: 'Xuất bảng thống kê phổ điểm đa sheet theo lớp và xuất danh sách phụ đạo theo điểm chuẩn.'
+  },
+  {
+    id: 'QUAN_TRI_TAI_KHOAN',
+    category: 'Hệ thống',
+    label: 'Quản trị Tài khoản & Phân quyền',
+    description: 'Cấp mới tài khoản, phân quyền chức năng, khóa tài khoản, reset mật khẩu, đồng bộ Supabase.'
+  }
+];
+
+export const DEFAULT_ROLE_PERMISSIONS: Record<UserRole, UserPermission[]> = {
+  Admin: [
+    'PHAN_HE_1_XEP_PHONG',
+    'PHAN_HE_2_GIAM_THI',
+    'PHAN_HE_3_KHAO_THI',
+    'KHAO_THI_TOAN_TRUONG',
+    'CSDL_QUAN_LY_KY_THI',
+    'CSDL_IMPORT_DIEM',
+    'CSDL_DONG_BO_ANH',
+    'CSDL_XUAT_BAO_CAO',
+    'QUAN_TRI_TAI_KHOAN'
+  ],
+  BanGiamHieu: [
+    'PHAN_HE_1_XEP_PHONG',
+    'PHAN_HE_2_GIAM_THI',
+    'PHAN_HE_3_KHAO_THI',
+    'KHAO_THI_TOAN_TRUONG',
+    'CSDL_QUAN_LY_KY_THI',
+    'CSDL_IMPORT_DIEM',
+    'CSDL_DONG_BO_ANH',
+    'CSDL_XUAT_BAO_CAO'
+  ],
+  GiaoVu: [
+    'PHAN_HE_1_XEP_PHONG',
+    'PHAN_HE_2_GIAM_THI',
+    'CSDL_QUAN_LY_KY_THI',
+    'CSDL_IMPORT_DIEM',
+    'CSDL_DONG_BO_ANH',
+    'CSDL_XUAT_BAO_CAO'
+  ],
+  ToTruong: [
+    'PHAN_HE_3_KHAO_THI',
+    'CSDL_XUAT_BAO_CAO'
+  ],
+  GiaoVien: [
+    'PHAN_HE_2_GIAM_THI'
+  ]
+};
+
+export function hasUserPermission(
+  user: UserProfile | null | undefined,
+  permission: UserPermission
+): boolean {
+  if (!user) return false;
+  if (user.role === 'Admin') return true;
+  if (Array.isArray(user.permissions) && user.permissions.length > 0) {
+    return user.permissions.includes(permission);
+  }
+  const defaults = DEFAULT_ROLE_PERMISSIONS[user.role] || [];
+  return defaults.includes(permission);
+}
+
+/**
  * Ma trận câu hỏi đề kiểm tra (File 2)
  */
 export interface ExamMatrixItem {
@@ -219,7 +350,8 @@ export interface UserProfile {
   unit: string;           // Đơn vị
   specialization: string; // Chuyên môn
   phone: string;          // Số điện thoại
-  role: UserRole;         // 'Admin' hoặc 'GiaoVien'
+  role: UserRole;         // 'Admin', 'BanGiamHieu', 'GiaoVu', 'ToTruong', 'GiaoVien'
+  permissions?: UserPermission[]; // Danh sách nhóm chức năng được cấp quyền (đồng bộ Supabase)
   created_at?: string;
   updated_at?: string;
   is_active?: boolean;

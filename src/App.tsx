@@ -14,7 +14,7 @@ import {
   HelpCircle
 } from 'lucide-react';
 
-import { CandidateAssigned, CandidateInput, ExamConfig, ExportColumnsConfig, OptimizationResult, UserProfile } from './types';
+import { CandidateAssigned, CandidateInput, ExamConfig, ExportColumnsConfig, OptimizationResult, UserProfile, hasUserPermission } from './types';
 import { generateSampleCandidates } from './utils/sampleData';
 import { optimizeRoomAllocation, recalculateOptimizationResult, getRoomDisplayLabel } from './utils/optimizer';
 import { DEFAULT_EXPORT_CONFIG } from './utils/columnDefaults';
@@ -73,6 +73,7 @@ export default function App() {
     leaderTitle: 'TRƯỞNG ĐIỂM THI',
     surveyAllocationMode: 'bo_gddt_rolling_fit',
     roomAssignmentModel: 'moet_fixed',
+    sortSbdAscendingInRoom: true,
   });
 
   // Tùy biến Theme giao diện & Header/Footer
@@ -146,16 +147,26 @@ export default function App() {
 
   // Đồng bộ phân hệ mặc định ngay khi người dùng đăng nhập hoặc đổi tài khoản
   useEffect(() => {
-    if (currentUser?.role === 'ToTruong') {
-      setMainModule('score_analytics');
+    if (currentUser) {
+      if (!hasUserPermission(currentUser, 'PHAN_HE_1_XEP_PHONG')) {
+        if (hasUserPermission(currentUser, 'PHAN_HE_3_KHAO_THI')) {
+          setMainModule('score_analytics');
+        } else if (hasUserPermission(currentUser, 'PHAN_HE_2_GIAM_THI')) {
+          setMainModule('proctor_council');
+        }
+      }
     }
   }, [currentUser]);
 
   const handleLoginSuccess = (user: UserProfile) => {
     setCurrentUser(user);
-    if (user.role === 'ToTruong') {
-      setMainModule('score_analytics');
-    } else if (user.role === 'GiaoVu' || user.role === 'BanGiamHieu') {
+    if (!hasUserPermission(user, 'PHAN_HE_1_XEP_PHONG')) {
+      if (hasUserPermission(user, 'PHAN_HE_3_KHAO_THI')) {
+        setMainModule('score_analytics');
+      } else if (hasUserPermission(user, 'PHAN_HE_2_GIAM_THI')) {
+        setMainModule('proctor_council');
+      }
+    } else {
       setMainModule('room_allocation');
     }
   };
@@ -206,7 +217,10 @@ export default function App() {
       config.maxPerRoom,
       config.startRoomCode,
       config.examCategory,
-      config.startSbd
+      config.startSbd,
+      config.balanceRoomsInGroup !== false,
+      config.surveyAllocationMode || 'bo_gddt_rolling_fit',
+      config.sortSbdAscendingInRoom ?? true
     );
     setResult(initialResult);
     setInitialAutoResult(initialResult);
@@ -220,20 +234,25 @@ export default function App() {
       setActiveTab('rooms');
     }
 
-    // Nếu thay đổi các thông số cấu hình cốt lõi (category, startSbd, maxPerRoom, startRoomCode)
+    // Nếu thay đổi các thông số cấu hình cốt lõi (category, startSbd, maxPerRoom, startRoomCode, sortSbdAscendingInRoom, balanceRoomsInGroup)
     if (
       candidates.length > 0 &&
       (newConfig.examCategory !== undefined ||
        newConfig.startSbd !== undefined ||
        newConfig.maxPerRoom !== undefined ||
-       newConfig.startRoomCode !== undefined)
+       newConfig.startRoomCode !== undefined ||
+       newConfig.sortSbdAscendingInRoom !== undefined ||
+       newConfig.balanceRoomsInGroup !== undefined)
     ) {
       handleExecute(
         candidates,
         updated.maxPerRoom,
         updated.startRoomCode,
         updated.examCategory,
-        updated.startSbd
+        updated.startSbd,
+        updated.balanceRoomsInGroup !== false,
+        updated.surveyAllocationMode || 'bo_gddt_rolling_fit',
+        updated.sortSbdAscendingInRoom ?? true
       );
     }
   };
@@ -273,7 +292,16 @@ export default function App() {
     if (originalKeys && originalKeys.length > 0) {
       setAvailableFileKeys(originalKeys);
     }
-    handleExecute(data, config.maxPerRoom, config.startRoomCode, config.examCategory, config.startSbd);
+    handleExecute(
+      data,
+      config.maxPerRoom,
+      config.startRoomCode,
+      config.examCategory,
+      config.startSbd,
+      config.balanceRoomsInGroup !== false,
+      config.surveyAllocationMode || 'bo_gddt_rolling_fit',
+      config.sortSbdAscendingInRoom ?? true
+    );
   };
 
   const handleExecute = (
@@ -283,7 +311,8 @@ export default function App() {
     examCat = config.examCategory,
     startSbd = config.startSbd,
     balanceRooms = config.balanceRoomsInGroup !== false,
-    surveyMode = config.surveyAllocationMode || 'bo_gddt_rolling_fit'
+    surveyMode = config.surveyAllocationMode || 'bo_gddt_rolling_fit',
+    sortSbdAscending = config.sortSbdAscendingInRoom ?? true
   ) => {
     if (!dataToUse || dataToUse.length === 0) return;
     setIsProcessing(true);
@@ -298,7 +327,8 @@ export default function App() {
         examCat,
         startSbd,
         balanceRooms,
-        surveyMode
+        surveyMode,
+        sortSbdAscending
       );
       setResult(optimized);
       setInitialAutoResult(optimized);
@@ -323,7 +353,8 @@ export default function App() {
     const recalculated = recalculateOptimizationResult(
       newCandidates,
       config.maxPerRoom,
-      config.startRoomCode
+      config.startRoomCode,
+      config.sortSbdAscendingInRoom ?? true
     );
     setResult(recalculated);
     setIsManuallyModified(true);
@@ -350,7 +381,8 @@ export default function App() {
       config.examCategory,
       config.startSbd,
       config.balanceRoomsInGroup !== false,
-      config.surveyAllocationMode || 'bo_gddt_rolling_fit'
+      config.surveyAllocationMode || 'bo_gddt_rolling_fit',
+      config.sortSbdAscendingInRoom ?? true
     );
     setResult(restored);
     setIsManuallyModified(false);
@@ -384,8 +416,18 @@ export default function App() {
     );
   }
 
-  // Đối với Tổ trưởng chuyên môn: Tuyệt đối chỉ phân quyền vào Phân hệ 3 (Khảo thí & Bảng điểm), không bao giờ hiển thị Phân hệ 1 hoặc 2
-  const effectiveModule = currentUser?.role === 'ToTruong' ? 'score_analytics' : mainModule;
+  // Phân hệ hiệu lực dựa trên quyền thực tế được cấp cho tài khoản
+  const canAccessRoom = !currentUser || hasUserPermission(currentUser, 'PHAN_HE_1_XEP_PHONG');
+  const canAccessProctor = !currentUser || hasUserPermission(currentUser, 'PHAN_HE_2_GIAM_THI');
+  const canAccessAnalytics = !currentUser || hasUserPermission(currentUser, 'PHAN_HE_3_KHAO_THI');
+
+  const effectiveModule = 
+    (mainModule === 'room_allocation' && canAccessRoom) ? 'room_allocation' :
+    (mainModule === 'proctor_council' && canAccessProctor) ? 'proctor_council' :
+    (mainModule === 'score_analytics' && canAccessAnalytics) ? 'score_analytics' :
+    canAccessRoom ? 'room_allocation' :
+    canAccessProctor ? 'proctor_council' :
+    canAccessAnalytics ? 'score_analytics' : 'room_allocation';
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col md:flex-row text-slate-900 font-sans">
@@ -576,8 +618,8 @@ export default function App() {
             </div>
           </div>
 
-            {/* CHUYỂN ĐỔI 3 PHÂN HỆ CỐT LÕI (THEO PHÂN QUYỀN VAI TRÒ ADMIN / GIAOVU / TOTRUONG) */}
-            {currentUser?.role === 'ToTruong' ? (
+            {/* CHUYỂN ĐỔI 3 PHÂN HỆ CỐT LÕI (THEO PHÂN QUYỀN VAI TRÒ HOẶC QUYỀN TÙY BIẾN) */}
+            {currentUser?.role === 'ToTruong' && !hasUserPermission(currentUser, 'PHAN_HE_1_XEP_PHONG') && !hasUserPermission(currentUser, 'PHAN_HE_2_GIAM_THI') ? (
               <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 shadow-2xs">
                 <TrendingUp className="w-4 h-4 text-emerald-600" />
                 <span>Khảo thí GDPT 2018 & Phân tích Đánh giá Chất lượng</span>
@@ -587,8 +629,8 @@ export default function App() {
               </div>
             ) : (
               <div className="flex items-center p-1 bg-slate-100/90 border border-slate-200 rounded-xl shadow-2xs">
-                {/* Phân hệ 1: Admin, Ban Giám hiệu và Giáo vụ */}
-                {(currentUser?.role === 'Admin' || currentUser?.role === 'BanGiamHieu' || currentUser?.role === 'GiaoVu' || !currentUser) && (
+                {/* Phân hệ 1: Xếp phòng thi & Báo cáo */}
+                {(!currentUser || hasUserPermission(currentUser, 'PHAN_HE_1_XEP_PHONG')) && (
                   <button
                     id="btn-switch-room-module"
                     type="button"
@@ -615,8 +657,8 @@ export default function App() {
                   </button>
                 )}
 
-                {/* Phân hệ 2: Admin, Ban Giám hiệu và Giáo vụ */}
-                {(currentUser?.role === 'Admin' || currentUser?.role === 'BanGiamHieu' || currentUser?.role === 'GiaoVu' || !currentUser) && (
+                {/* Phân hệ 2: Phân công Hội đồng & Giám thị */}
+                {(!currentUser || hasUserPermission(currentUser, 'PHAN_HE_2_GIAM_THI')) && (
                   <button
                     id="btn-switch-proctor-module"
                     type="button"
@@ -638,8 +680,8 @@ export default function App() {
                   </button>
                 )}
 
-                {/* Phân hệ 3: Toàn trường cho Admin và Ban Giám hiệu */}
-                {(currentUser?.role === 'Admin' || currentUser?.role === 'BanGiamHieu' || !currentUser) && (
+                {/* Phân hệ 3: Bảng điểm & AI Khảo thí */}
+                {(!currentUser || hasUserPermission(currentUser, 'PHAN_HE_3_KHAO_THI')) && (
                   <button
                     id="btn-switch-analytics-module"
                     type="button"
@@ -656,7 +698,7 @@ export default function App() {
                     <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-semibold ${
                       effectiveModule === 'score_analytics' ? 'bg-emerald-700 text-emerald-100' : 'bg-emerald-100 text-emerald-800'
                     }`}>
-                      Toàn trường
+                      Khảo thí
                     </span>
                   </button>
                 )}

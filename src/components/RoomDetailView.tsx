@@ -25,12 +25,17 @@ export const RoomDetailView: React.FC<RoomDetailViewProps> = ({
 }) => {
   const [selectedRoom, setSelectedRoom] = useState<number>(1);
   const [searchQuery, setSearchQuery] = useState<string>('');
-  const [sortMode, setSortMode] = useState<'tohop' | 'tc1' | 'tc2' | 'sbd'>('tohop');
+  const [sortMode, setSortMode] = useState<'default' | 'tohop' | 'tc1' | 'tc2' | 'sbd'>('default');
 
   const rawRoomCandidates = candidates.filter(c => c['Phòng thi'] === selectedRoom);
 
   const subjectKeyForSort = sortMode === 'tc1' ? 'TC1' : sortMode === 'tc2' ? 'TC2' : sortMode === 'sbd' ? 'M1' : 'ToHop_ChuanHoa';
-  const roomCandidates = sortCandidatesInRoomForShift(rawRoomCandidates, subjectKeyForSort);
+  const shouldSortSbd = sortMode === 'sbd' || (sortMode === 'default' && (config.sortSbdAscendingInRoom ?? true));
+  const roomCandidates = sortCandidatesInRoomForShift(
+    rawRoomCandidates,
+    subjectKeyForSort,
+    sortMode === 'tohop' ? false : shouldSortSbd
+  );
 
   const filteredCandidates = roomCandidates.filter(c => {
     if (!searchQuery.trim()) return true;

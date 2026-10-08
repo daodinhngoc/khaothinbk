@@ -78,7 +78,8 @@ export function optimizeRoomAllocation(
   examCategory: ExamCategory = 'Kiểm tra định kỳ',
   startSbd: string = '52830001',
   balanceRoomsInGroup: boolean = true,
-  surveyAllocationMode: SurveyAllocationMode = 'bo_gddt_rolling_fit'
+  surveyAllocationMode: SurveyAllocationMode = 'bo_gddt_rolling_fit',
+  sortSbdAscendingInRoom: boolean = true
 ): OptimizationResult {
   if (!candidates || candidates.length === 0) {
     return {
@@ -390,6 +391,16 @@ export function optimizeRoomAllocation(
     let currentRoomIndex = 1;
     for (let i = 0; i < rollingList.length; i += maxPerRoom) {
       const chunk = rollingList.slice(i, i + maxPerRoom);
+
+      // Nếu bật công tắc: Sắp xếp SBD trong phòng tăng dần liên tục (1..24)
+      if (sortSbdAscendingInRoom) {
+        chunk.sort((a, b) => {
+          const sbdA = String(a.SBD || '').trim();
+          const sbdB = String(b.SBD || '').trim();
+          return sbdA.localeCompare(sbdB, undefined, { numeric: true, sensitivity: 'base' });
+        });
+      }
+
       chunk.forEach((st, idxInChunk) => {
         assigned.push({
           ...st,
@@ -405,7 +416,7 @@ export function optimizeRoomAllocation(
     }
   }
 
-  return recalculateOptimizationResult(assigned, maxPerRoom, startRoomCode);
+  return recalculateOptimizationResult(assigned, maxPerRoom, startRoomCode, sortSbdAscendingInRoom);
 }
 
 /**
@@ -414,7 +425,8 @@ export function optimizeRoomAllocation(
 export function recalculateOptimizationResult(
   candidates: CandidateAssigned[],
   maxPerRoom: number = 24,
-  startRoomCode: string = '01'
+  startRoomCode: string = '01',
+  sortSbdAscendingInRoom: boolean = true
 ): OptimizationResult {
   if (!candidates || candidates.length === 0) {
     return {
@@ -451,15 +463,24 @@ export function recalculateOptimizationResult(
 
   sortedNewRooms.forEach(roomNo => {
     const roomStudents = roomsMap.get(roomNo) || [];
-    // Giữ nguyên thứ tự theo khối môn trong phòng (STT_Phong), tránh xáo trộn chéo giữa 2 tổ hợp
-    roomStudents.sort((a, b) => {
-      if (a.STT_Phong && b.STT_Phong && a.STT_Phong !== b.STT_Phong) {
-        return a.STT_Phong - b.STT_Phong;
-      }
-      const comboDiff = (a.ToHop_ChuanHoa || '').localeCompare(b.ToHop_ChuanHoa || '', 'vi');
-      if (comboDiff !== 0) return comboDiff;
-      return String(a.SBD).localeCompare(String(b.SBD), undefined, { numeric: true });
-    });
+    if (sortSbdAscendingInRoom) {
+      // Phương án 2: Sắp xếp SBD trong phòng thi tăng dần liên tục (1..24)
+      roomStudents.sort((a, b) => {
+        const sbdA = String(a.SBD || '').trim();
+        const sbdB = String(b.SBD || '').trim();
+        return sbdA.localeCompare(sbdB, undefined, { numeric: true, sensitivity: 'base' });
+      });
+    } else {
+      // Giữ nguyên thứ tự theo khối môn trong phòng (STT_Phong), tránh xáo trộn chéo giữa 2 tổ hợp
+      roomStudents.sort((a, b) => {
+        if (a.STT_Phong && b.STT_Phong && a.STT_Phong !== b.STT_Phong) {
+          return a.STT_Phong - b.STT_Phong;
+        }
+        const comboDiff = (a.ToHop_ChuanHoa || '').localeCompare(b.ToHop_ChuanHoa || '', 'vi');
+        if (comboDiff !== 0) return comboDiff;
+        return String(a.SBD).localeCompare(String(b.SBD), undefined, { numeric: true });
+      });
+    }
 
     roomStudents.forEach((student, idxInRoom) => {
       reAssigned.push({
@@ -505,7 +526,8 @@ export function splitRoomEqually(
   candidates: CandidateAssigned[],
   targetRoomNo: number,
   partsCount: 2 | 3 = 2,
-  startRoomCode: string = '01'
+  startRoomCode: string = '01',
+  sortSbdAscendingInRoom: boolean = true
 ): CandidateAssigned[] {
   const roomCandidates = candidates.filter(c => c['Phòng thi'] === targetRoomNo);
   if (roomCandidates.length < partsCount) {
@@ -544,7 +566,7 @@ export function splitRoomEqually(
     };
   });
 
-  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode).candidates;
+  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode, sortSbdAscendingInRoom).candidates;
 }
 
 /**
@@ -555,7 +577,8 @@ export function splitRoomByCount(
   candidates: CandidateAssigned[],
   targetRoomNo: number,
   countToMove: number,
-  startRoomCode: string = '01'
+  startRoomCode: string = '01',
+  sortSbdAscendingInRoom: boolean = true
 ): CandidateAssigned[] {
   const roomCandidates = candidates.filter(c => c['Phòng thi'] === targetRoomNo);
   if (countToMove <= 0 || countToMove >= roomCandidates.length) {
@@ -574,7 +597,7 @@ export function splitRoomByCount(
     return { ...c };
   });
 
-  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode).candidates;
+  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode, sortSbdAscendingInRoom).candidates;
 }
 
 /**
@@ -585,7 +608,8 @@ export function splitRoomBySubject(
   candidates: CandidateAssigned[],
   targetRoomNo: number,
   subjectCol: 'TC1' | 'TC2' = 'TC1',
-  startRoomCode: string = '01'
+  startRoomCode: string = '01',
+  sortSbdAscendingInRoom: boolean = true
 ): CandidateAssigned[] {
   const roomCandidates = candidates.filter(c => c['Phòng thi'] === targetRoomNo);
   const subjects = Array.from(new Set(roomCandidates.map(c => c[subjectCol] || 'Khác')));
@@ -605,7 +629,7 @@ export function splitRoomBySubject(
     return { ...c };
   });
 
-  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode).candidates;
+  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode, sortSbdAscendingInRoom).candidates;
 }
 
 /**
@@ -615,7 +639,8 @@ export function splitRoomByCustomSelection(
   candidates: CandidateAssigned[],
   targetRoomNo: number,
   selectedSBDs: string[],
-  startRoomCode: string = '01'
+  startRoomCode: string = '01',
+  sortSbdAscendingInRoom: boolean = true
 ): CandidateAssigned[] {
   if (!selectedSBDs || selectedSBDs.length === 0) {
     return candidates;
@@ -631,7 +656,7 @@ export function splitRoomByCustomSelection(
     return { ...c };
   });
 
-  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode).candidates;
+  return recalculateOptimizationResult(updatedCandidates, 24, startRoomCode, sortSbdAscendingInRoom).candidates;
 }
 
 /**

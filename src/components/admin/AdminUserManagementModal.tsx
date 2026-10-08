@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { 
   X, UserPlus, Users, Shield, Search, Check, Copy, KeyRound, 
   Lock, Unlock, RefreshCw, Mail, Phone, Building2, BookOpen, AlertCircle, Sparkles, Database,
-  Trash2, Cloud, ArrowLeftRight, CheckCircle2, Pencil, AlertTriangle
+  Trash2, Cloud, ArrowLeftRight, CheckCircle2, Pencil, AlertTriangle,
+  Sliders, CheckSquare, Square, RotateCcw, Info, ChevronDown, ChevronUp, ChevronRight, Layers, CheckCircle, ExternalLink
 } from 'lucide-react';
-import { UserProfile, UserRole } from '../../types';
+import { UserProfile, UserRole, UserPermission, ALL_PERMISSIONS, DEFAULT_ROLE_PERMISSIONS, hasUserPermission } from '../../types';
 import { 
   fetchAllProfiles, 
   createNewUserAccount, 
@@ -34,6 +35,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<'All' | 'Admin' | 'BanGiamHieu' | 'GiaoVu' | 'ToTruong' | 'GiaoVien'>('All');
   const [copiedSql, setCopiedSql] = useState<boolean>(false);
+  const [activeViewTab, setActiveViewTab] = useState<'users' | 'matrix'>('users');
 
   // Form State Cấp mới
   const [isAddingUser, setIsAddingUser] = useState<boolean>(false);
@@ -44,6 +46,8 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
   const [phone, setPhone] = useState<string>('');
   const [password, setPassword] = useState<string>('123456');
   const [role, setRole] = useState<UserRole>('ToTruong');
+  const [addPermissions, setAddPermissions] = useState<UserPermission[]>(DEFAULT_ROLE_PERMISSIONS.ToTruong);
+  const [showAddPermissionsConfig, setShowAddPermissionsConfig] = useState<boolean>(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
@@ -51,7 +55,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
   const [createdInfo, setCreatedInfo] = useState<{ email: string; pass: string; name: string } | null>(null);
   const [copiedInfo, setCopiedInfo] = useState<boolean>(false);
 
-  // Edit User State (Chỉnh sửa thông tin)
+  // Edit User State (Chỉnh sửa thông tin & Ma trận phân quyền chi tiết)
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [editFullName, setEditFullName] = useState<string>('');
   const [editUnit, setEditUnit] = useState<string>('');
@@ -59,6 +63,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
   const [editEmail, setEditEmail] = useState<string>('');
   const [editPhone, setEditPhone] = useState<string>('');
   const [editRole, setEditRole] = useState<UserRole>('GiaoVien');
+  const [editPermissions, setEditPermissions] = useState<UserPermission[]>([]);
   const [editIsActive, setEditIsActive] = useState<boolean>(true);
   const [editPassword, setEditPassword] = useState<string>('');
   const [editError, setEditError] = useState<string | null>(null);
@@ -136,6 +141,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
         phone: phone.trim(),
         password: password.trim(),
         role: role,
+        permissions: addPermissions,
       });
 
       if (!res.success) {
@@ -155,6 +161,8 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
       setEmail('');
       setPhone('');
       setPassword('Gv@2025');
+      setAddPermissions(DEFAULT_ROLE_PERMISSIONS.ToTruong);
+      setShowAddPermissionsConfig(false);
       setIsAddingUser(false);
       await loadData();
     } catch (err: any) {
@@ -200,9 +208,53 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
     setEditEmail(user.email);
     setEditPhone(user.phone || '');
     setEditRole(user.role);
+    const initialPerms = Array.isArray(user.permissions) && user.permissions.length > 0
+      ? [...user.permissions]
+      : [...(DEFAULT_ROLE_PERMISSIONS[user.role] || [])];
+    setEditPermissions(initialPerms);
     setEditIsActive(user.is_active !== false);
     setEditPassword('');
     setEditError(null);
+  };
+
+  // Các thao tác điều khiển phân quyền trong form Edit
+  const toggleEditPermission = (permId: UserPermission) => {
+    setEditPermissions(prev =>
+      prev.includes(permId) ? prev.filter(p => p !== permId) : [...prev, permId]
+    );
+  };
+
+  const applyRolePresetToEdit = (targetRole: UserRole) => {
+    const preset = DEFAULT_ROLE_PERMISSIONS[targetRole] || [];
+    setEditPermissions([...preset]);
+  };
+
+  const selectAllEditPermissions = () => {
+    setEditPermissions(ALL_PERMISSIONS.map(p => p.id));
+  };
+
+  const clearAllEditPermissions = () => {
+    setEditPermissions([]);
+  };
+
+  // Các thao tác điều khiển phân quyền trong form Add
+  const toggleAddPermission = (permId: UserPermission) => {
+    setAddPermissions(prev =>
+      prev.includes(permId) ? prev.filter(p => p !== permId) : [...prev, permId]
+    );
+  };
+
+  const applyRolePresetToAdd = (targetRole: UserRole) => {
+    const preset = DEFAULT_ROLE_PERMISSIONS[targetRole] || [];
+    setAddPermissions([...preset]);
+  };
+
+  const selectAllAddPermissions = () => {
+    setAddPermissions(ALL_PERMISSIONS.map(p => p.id));
+  };
+
+  const clearAllAddPermissions = () => {
+    setAddPermissions([]);
   };
 
   // Lưu chỉnh sửa thông tin người dùng (đồng bộ 2 chiều với Supabase)
@@ -225,6 +277,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
         phone: editPhone.trim(),
         role: editRole,
         is_active: editIsActive,
+        permissions: editPermissions,
         ...(editEmail.trim() && editEmail.trim() !== editingUser.email ? { email: editEmail.trim() } : {}),
         ...(editPassword.trim() ? { password: editPassword.trim() } : {}),
       });
@@ -232,7 +285,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
       if (res.success && res.user) {
         setSyncFeedback({
           type: 'success',
-          message: `Đã cập nhật thông tin "${res.user.full_name}" thành công đồng bộ trên CSDL Supabase!`
+          message: `Đã cập nhật thông tin & phân quyền (${editPermissions.length}/9 quyền) cho "${res.user.full_name}" thành công đồng bộ trên CSDL Supabase!`
         });
         setEditingUser(null);
         await loadData();
@@ -364,7 +417,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
                   Dành riêng cho Admin
                 </span>
               </div>
-              <p className="text-xs text-slate-500">Cấp tài khoản, phân quyền Admin/Giáo viên và đồng bộ với CSDL Supabase</p>
+              <p className="text-xs text-slate-500">Phân quyền linh hoạt theo nhóm chức năng, vai trò trường học và đồng bộ 2 chiều với CSDL Supabase</p>
             </div>
           </div>
 
@@ -381,6 +434,42 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
               className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
             >
               <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Thanh chuyển đổi Tab: Danh sách tài khoản vs Ma trận phân quyền hệ thống */}
+        <div className="px-6 bg-slate-100/70 border-b border-slate-200 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setActiveViewTab('users')}
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                activeViewTab === 'users'
+                  ? 'border-indigo-600 text-indigo-700 bg-white shadow-2xs rounded-t-lg'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-200/50 rounded-t-lg'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>Danh sách Tài khoản</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">
+                {profiles.length}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveViewTab('matrix')}
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                activeViewTab === 'matrix'
+                  ? 'border-indigo-600 text-indigo-700 bg-white shadow-2xs rounded-t-lg'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-200/50 rounded-t-lg'
+              }`}
+            >
+              <Sliders className="w-4 h-4" />
+              <span>Ma trận Phân quyền Chức năng</span>
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">
+                5 Vai trò x 9 Quyền
+              </span>
             </button>
           </div>
         </div>
@@ -417,16 +506,16 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
           </div>
         )}
 
-        {/* Banner hỗ trợ cập nhật SQL Supabase cho vai trò Ban Giám hiệu */}
+        {/* Banner hỗ trợ cập nhật SQL Supabase cho Ma trận phân quyền và vai trò */}
         <div className="mx-6 mt-3 px-3.5 py-2 rounded-xl bg-indigo-50/70 border border-indigo-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5">
           <div className="flex items-center gap-2 text-indigo-900">
-            <span className="font-bold text-indigo-700 bg-indigo-200/80 px-1.5 py-0.5 rounded text-[10px]">LƯU Ý SUPABASE</span>
-            <span className="text-[11.5px]">Để CSDL Supabase lưu thẳng vai trò <strong>Ban Giám hiệu</strong> vào bảng <code>profiles</code>, hãy chạy lệnh cập nhật ràng buộc trong Supabase SQL Editor:</span>
+            <span className="font-bold text-indigo-700 bg-indigo-200/80 px-1.5 py-0.5 rounded text-[10px]">LƯU Ý CSDL SUPABASE</span>
+            <span className="text-[11.5px]">Để CSDL Supabase lưu trữ chuẩn xác <strong>Ma trận phân quyền (JSONB)</strong> và vai trò <strong>Ban Giám hiệu</strong>, hãy chạy lệnh sau trong SQL Editor:</span>
           </div>
           <button
             type="button"
             onClick={() => {
-              const sql = "ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;\nALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check CHECK (role IN ('Admin', 'BanGiamHieu', 'GiaoVu', 'ToTruong', 'GiaoVien'));";
+              const sql = "-- 1. Bổ sung cột permissions (JSONB) lưu quyền chi tiết:\nALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS permissions JSONB DEFAULT '[]'::jsonb;\n\n-- 2. Cập nhật ràng buộc vai trò 5 nhóm người dùng:\nALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;\nALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check CHECK (role IN ('Admin', 'BanGiamHieu', 'GiaoVu', 'ToTruong', 'GiaoVien'));";
               navigator.clipboard.writeText(sql);
               setCopiedSql(true);
               setTimeout(() => setCopiedSql(false), 2500);
@@ -435,7 +524,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
             title="Sao chép câu lệnh SQL để chạy trong Supabase SQL Editor"
           >
             {copiedSql ? <Check className="w-3 h-3 text-emerald-300" /> : <Copy className="w-3 h-3" />}
-            <span>{copiedSql ? 'Đã sao chép SQL!' : 'Sao chép SQL cập nhật BGH'}</span>
+            <span>{copiedSql ? 'Đã sao chép SQL!' : 'Sao chép SQL CSDL'}</span>
           </button>
         </div>
 
@@ -463,8 +552,11 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
           </div>
         )}
 
-        {/* Toolbar & Thống kê */}
-        <div className="px-6 py-3 border-b border-slate-200/80 bg-white flex flex-wrap items-center justify-between gap-3">
+        {/* TAB NỘI DUNG: DANH SÁCH TÀI KHOẢN vs MA TRẬN PHÂN QUYỀN */}
+        {activeViewTab === 'users' ? (
+          <>
+            {/* Toolbar & Thống kê */}
+            <div className="px-6 py-3 border-b border-slate-200/80 bg-white flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
             <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-lg text-xs text-slate-700">
               <Users className="w-3.5 h-3.5 text-slate-500" />
@@ -628,7 +720,11 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
                     </label>
                     <select
                       value={role}
-                      onChange={(e) => setRole(e.target.value as UserRole)}
+                      onChange={(e) => {
+                        const newRole = e.target.value as UserRole;
+                        setRole(newRole);
+                        setAddPermissions(DEFAULT_ROLE_PERMISSIONS[newRole] || []);
+                      }}
                       className="w-full bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs text-slate-800 font-bold focus:ring-2 focus:ring-blue-500 focus:outline-none"
                     >
                       <option value="Admin">Admin (Toàn quyền hệ thống & Quản lý tài khoản)</option>
@@ -638,6 +734,78 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
                       <option value="GiaoVien">Giáo viên bộ môn (Tra cứu phòng & nhiệm vụ)</option>
                     </select>
                   </div>
+                </div>
+
+                {/* Khu vực mở rộng tùy biến phân quyền chức năng khi cấp mới */}
+                <div className="pt-2 border-t border-slate-200">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setShowAddPermissionsConfig(!showAddPermissionsConfig)}
+                      className="text-xs font-semibold text-indigo-700 hover:text-indigo-900 flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Shield className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Phân quyền chi tiết: <b>{addPermissions.length}/9 quyền</b> ({role})</span>
+                      <span className="text-[11px] text-slate-500 font-normal">
+                        {showAddPermissionsConfig ? '(Nhấn để thu gọn ▲)' : '(Nhấn để tùy biến riêng ▼)'}
+                      </span>
+                    </button>
+                    {showAddPermissionsConfig && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => applyRolePresetToAdd(role)}
+                          className="text-[11px] text-slate-600 hover:text-indigo-700 flex items-center gap-1"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Theo vai trò</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={selectAllAddPermissions}
+                          className="text-[11px] text-slate-600 hover:text-indigo-700"
+                        >
+                          Chọn tất cả
+                        </button>
+                        <button
+                          type="button"
+                          onClick={clearAllAddPermissions}
+                          className="text-[11px] text-slate-600 hover:text-rose-700"
+                        >
+                          Bỏ chọn
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  {showAddPermissionsConfig && (
+                    <div className="mt-2.5 p-3 bg-white rounded-xl border border-slate-200 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 animate-in fade-in">
+                      {ALL_PERMISSIONS.map(p => {
+                        const isChecked = addPermissions.includes(p.id);
+                        return (
+                          <label
+                            key={p.id}
+                            className={`p-2 rounded-lg border text-[11px] flex items-start gap-2 cursor-pointer transition-all ${
+                              isChecked
+                                ? 'bg-indigo-50/70 border-indigo-300 text-indigo-950 font-medium'
+                                : 'bg-slate-50/60 border-slate-200 text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleAddPermission(p.id)}
+                              className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="font-semibold leading-tight">{p.label}</div>
+                              <div className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">{p.description}</div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
 
                 {/* Mật khẩu */}
@@ -754,6 +922,7 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
                   <th className="py-3 px-4">Tên đăng nhập (Email)</th>
                   <th className="py-3 px-3 text-center">Điện thoại</th>
                   <th className="py-3 px-3 text-center">Vai trò</th>
+                  <th className="py-3 px-3 text-center">Phân quyền</th>
                   <th className="py-3 px-3 text-center">Trạng thái</th>
                   <th className="py-3 px-4 text-center">Thao tác</th>
                 </tr>
@@ -798,6 +967,35 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
                       }`}>
                         {user.role === 'Admin' ? 'Admin' : user.role === 'BanGiamHieu' ? 'Ban Giám hiệu' : user.role === 'GiaoVu' ? 'Giáo vụ' : user.role === 'ToTruong' ? 'Tổ trưởng' : 'Giáo viên'}
                       </span>
+                    </td>
+                    <td className="py-2.5 px-3 text-center">
+                      {(() => {
+                        const userPerms = Array.isArray(user.permissions) && user.permissions.length > 0
+                          ? user.permissions
+                          : (DEFAULT_ROLE_PERMISSIONS[user.role] || []);
+                        const count = userPerms.length;
+                        const isFull = count === ALL_PERMISSIONS.length;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => handleStartEdit(user)}
+                            className="inline-flex items-center gap-1 cursor-pointer transition-transform hover:scale-105"
+                            title={`Được cấp ${count}/${ALL_PERMISSIONS.length} quyền: Nhấn để xem & tùy biến chi tiết`}
+                          >
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isFull 
+                                ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                                : count >= 6
+                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-200'
+                                : count >= 2
+                                ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-600 border border-slate-200'
+                            }`}>
+                              {isFull ? 'Full (9/9)' : `${count}/9 quyền`}
+                            </span>
+                          </button>
+                        );
+                      })()}
                     </td>
                     <td className="py-2.5 px-3 text-center">
                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${
@@ -865,19 +1063,319 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
             </table>
           )}
         </div>
+      </>
+    ) : (
+      <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
+        {/* Header giới thiệu ma trận */}
+        <div className="p-4 bg-gradient-to-r from-indigo-50 via-blue-50 to-purple-50 rounded-2xl border border-indigo-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-xs shrink-0 mt-0.5">
+              <Sliders className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-slate-800">
+                Ma trận Phân quyền Hệ thống Chuẩn Trường học
+              </h3>
+              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">
+                Hệ thống chuẩn hóa 4 nhóm chức năng lõi gồm 9 quyền hạn chi tiết trên 5 nhóm người dùng. Admin có thể tùy biến linh hoạt cho từng tài khoản và dữ liệu được đồng bộ 100% hai chiều với CSDL Supabase Cloud.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setIsAddingUser(true);
+                setActiveViewTab('users');
+              }}
+              className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span>Cấp tài khoản mới</span>
+            </button>
+          </div>
+        </div>
 
-        {/* Modal con: Chỉnh sửa thông tin tài khoản (Đồng bộ 2 chiều Supabase) */}
+        {/* 5 Thẻ tóm tắt vai trò */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {[
+            {
+              roleKey: 'Admin' as UserRole,
+              roleName: 'Admin',
+              title: 'Quản trị viên tối cao',
+              color: 'purple',
+              permsCount: '9/9 quyền (100%)',
+              desc: 'Toàn quyền 3 phân hệ, CSDL khảo thí, cấp & quản lý tài khoản.',
+            },
+            {
+              roleKey: 'BanGiamHieu' as UserRole,
+              roleName: 'Ban Giám hiệu',
+              title: 'Lãnh đạo nhà trường',
+              color: 'rose',
+              permsCount: '8/9 quyền',
+              desc: 'Toàn quyền 3 phân hệ cốt lõi & CSDL khảo thí toàn trường (không can thiệp user).',
+            },
+            {
+              roleKey: 'GiaoVu' as UserRole,
+              roleName: 'Giáo vụ',
+              title: 'Chuyên trách Thi cử',
+              color: 'amber',
+              permsCount: '6/9 quyền',
+              desc: 'Phân hệ 1: Xếp phòng thi & Phân hệ 2: Phân công giám thị, import điểm máy chấm.',
+            },
+            {
+              roleKey: 'ToTruong' as UserRole,
+              roleName: 'Tổ trưởng',
+              title: 'Tổ trưởng chuyên môn',
+              color: 'emerald',
+              permsCount: '2/9 quyền',
+              desc: 'Phân hệ 3: Bảng điểm, YCCĐ, AI Khảo thí & can thiệp sư phạm bộ môn.',
+            },
+            {
+              roleKey: 'GiaoVien' as UserRole,
+              roleName: 'Giáo viên',
+              title: 'Cán bộ / Giáo viên',
+              color: 'blue',
+              permsCount: '1/9 quyền',
+              desc: 'Phân hệ 2: Tra cứu lịch thi, phòng thi & phân công coi thi.',
+            },
+          ].map((item) => {
+            const count = profiles.filter(p => p.role === item.roleKey).length;
+            const borderClass = 
+              item.color === 'purple' ? 'border-purple-200 bg-purple-50/40 hover:border-purple-300' :
+              item.color === 'rose' ? 'border-rose-200 bg-rose-50/40 hover:border-rose-300' :
+              item.color === 'amber' ? 'border-amber-200 bg-amber-50/40 hover:border-amber-300' :
+              item.color === 'emerald' ? 'border-emerald-200 bg-emerald-50/40 hover:border-emerald-300' :
+              'border-blue-200 bg-blue-50/40 hover:border-blue-300';
+            
+            const badgeClass =
+              item.color === 'purple' ? 'bg-purple-100 text-purple-800' :
+              item.color === 'rose' ? 'bg-rose-100 text-rose-800' :
+              item.color === 'amber' ? 'bg-amber-100 text-amber-800' :
+              item.color === 'emerald' ? 'bg-emerald-100 text-emerald-800' :
+              'bg-blue-100 text-blue-800';
+
+            return (
+              <div key={item.roleKey} className={`p-3.5 rounded-xl border flex flex-col justify-between transition-all ${borderClass}`}>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${badgeClass}`}>
+                      {item.roleName}
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-500">
+                      {item.permsCount}
+                    </span>
+                  </div>
+                  <div className="font-bold text-slate-800 text-xs">{item.title}</div>
+                  <p className="text-[10.5px] text-slate-500 mt-1 leading-snug line-clamp-2">
+                    {item.desc}
+                  </p>
+                </div>
+
+                <div className="mt-3 pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-600">
+                    Hiện có: <b>{count}</b> cán bộ
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRoleFilter(item.roleKey);
+                      setActiveViewTab('users');
+                    }}
+                    className="text-[10.5px] font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5 cursor-pointer"
+                  >
+                    <span>Xem DS</span>
+                    <ChevronRight className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Bảng Ma trận Phân quyền Đối Chiếu Toàn Diện */}
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+          <div className="px-5 py-3.5 bg-slate-50/80 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-indigo-600" />
+              <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wide">
+                BẢNG ĐỐI CHIẾU MA TRẬN 9 QUYỀN CHỨC NĂNG X 5 NHÓM VAI TRÒ
+              </h4>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              (Dấu <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 inline mx-0.5" /> biểu thị vai trò có quyền thực thi chức năng đó)
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                  <th className="py-3 px-3 w-12 text-center">STT</th>
+                  <th className="py-3 px-4 w-72">Nhóm chức năng & Mã quyền</th>
+                  <th className="py-3 px-4">Mô tả phạm vi nghiệp vụ</th>
+                  <th className="py-3 px-3 text-center w-24 text-purple-800 bg-purple-50/50">Admin</th>
+                  <th className="py-3 px-3 text-center w-24 text-rose-800 bg-rose-50/50">Ban Giám hiệu</th>
+                  <th className="py-3 px-3 text-center w-24 text-amber-800 bg-amber-50/50">Giáo vụ</th>
+                  <th className="py-3 px-3 text-center w-24 text-emerald-800 bg-emerald-50/50">Tổ trưởng</th>
+                  <th className="py-3 px-3 text-center w-24 text-blue-800 bg-blue-50/50">Giáo viên</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-200/70">
+                {(['Cốt lõi', 'Khảo thí', 'CSDL Tra cứu', 'Hệ thống'] as const).map(cat => {
+                  const perms = ALL_PERMISSIONS.filter(p => p.category === cat);
+                  const catBadge =
+                    cat === 'Cốt lõi' ? 'bg-blue-100 text-blue-800' :
+                    cat === 'Khảo thí' ? 'bg-emerald-100 text-emerald-800' :
+                    cat === 'CSDL Tra cứu' ? 'bg-amber-100 text-amber-800' :
+                    'bg-purple-100 text-purple-800';
+
+                  return (
+                    <React.Fragment key={cat}>
+                      <tr className="bg-slate-50/80 font-bold text-slate-700">
+                        <td colSpan={8} className="py-2 px-4">
+                          <span className={`px-2 py-0.5 rounded text-[10px] uppercase tracking-wider ${catBadge}`}>
+                            NHÓM {cat.toUpperCase()} ({perms.length} QUYỀN)
+                          </span>
+                        </td>
+                      </tr>
+
+                      {perms.map((p) => {
+                        const hasAdmin = DEFAULT_ROLE_PERMISSIONS.Admin.includes(p.id);
+                        const hasBGH = DEFAULT_ROLE_PERMISSIONS.BanGiamHieu.includes(p.id);
+                        const hasGVU = DEFAULT_ROLE_PERMISSIONS.GiaoVu.includes(p.id);
+                        const hasTT = DEFAULT_ROLE_PERMISSIONS.ToTruong.includes(p.id);
+                        const hasGV = DEFAULT_ROLE_PERMISSIONS.GiaoVien.includes(p.id);
+
+                        return (
+                          <tr key={p.id} className="hover:bg-slate-50/60 transition-colors">
+                            <td className="py-2.5 px-3 text-center text-slate-400 font-mono">
+                              {ALL_PERMISSIONS.findIndex(ap => ap.id === p.id) + 1}
+                            </td>
+                            <td className="py-2.5 px-4 font-semibold text-slate-800">
+                              <div>{p.label}</div>
+                              <div className="text-[10px] font-mono text-slate-400">{p.id}</div>
+                            </td>
+                            <td className="py-2.5 px-4 text-slate-600 text-[11px] leading-relaxed">
+                              {p.description}
+                            </td>
+                            <td className="py-2.5 px-3 text-center bg-purple-50/20">
+                              {hasAdmin ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 mx-auto" />
+                              ) : (
+                                <span className="text-slate-300 font-bold">—</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center bg-rose-50/20">
+                              {hasBGH ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 mx-auto" />
+                              ) : (
+                                <span className="text-slate-300 font-bold">—</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center bg-amber-50/20">
+                              {hasGVU ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 mx-auto" />
+                              ) : (
+                                <span className="text-slate-300 font-bold">—</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center bg-emerald-50/20">
+                              {hasTT ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 mx-auto" />
+                              ) : (
+                                <span className="text-slate-300 font-bold">—</span>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center bg-blue-50/20">
+                              {hasGV ? (
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 mx-auto" />
+                              ) : (
+                                <span className="text-slate-300 font-bold">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </React.Fragment>
+                  );
+                })}
+
+                {/* Dòng tổng kết */}
+                <tr className="bg-slate-100/90 font-bold text-slate-800 border-t-2 border-slate-300">
+                  <td colSpan={3} className="py-3 px-4 text-right">
+                    TỔNG SỐ QUYỀN MẶC ĐỊNH / 9 QUYỀN HỆ THỐNG:
+                  </td>
+                  <td className="py-3 px-3 text-center text-purple-700 bg-purple-100/60 font-mono">
+                    9 / 9
+                  </td>
+                  <td className="py-3 px-3 text-center text-rose-700 bg-rose-100/60 font-mono">
+                    8 / 9
+                  </td>
+                  <td className="py-3 px-3 text-center text-amber-700 bg-amber-100/60 font-mono">
+                    6 / 9
+                  </td>
+                  <td className="py-3 px-3 text-center text-emerald-700 bg-emerald-100/60 font-mono">
+                    2 / 9
+                  </td>
+                  <td className="py-3 px-3 text-center text-blue-700 bg-blue-100/60 font-mono">
+                    1 / 9
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Khối Giải thích & Trả lời nghiệp vụ */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs text-slate-700">
+            <div className="flex items-center gap-2 font-bold text-indigo-900 text-sm">
+              <CheckCircle className="w-4 h-4 text-emerald-600" />
+              <span>Cơ chế Phân quyền 2 Tầng Linh hoạt</span>
+            </div>
+            <p className="leading-relaxed">
+              • <b>Tầng 1 (Role Presets):</b> 5 vai trò chuẩn trường học giúp tạo nhanh tài khoản với các quyền mặc định phù hợp (Admin, Ban Giám hiệu, Giáo vụ, Tổ trưởng, Giáo viên).
+            </p>
+            <p className="leading-relaxed">
+              • <b>Tầng 2 (Custom User Permissions):</b> Admin có toàn quyền tích thêm hoặc bớt bất kỳ quyền nào trong 9 quyền khi Cấp mới hoặc Sửa thông tin tài khoản. Mỗi tài khoản có thể có ma trận phân quyền độc lập.
+            </p>
+            <p className="leading-relaxed">
+              • <b>Hiệu lực tức thì:</b> Sau khi lưu, giao diện điều hướng các phân hệ và nút bấm trên thanh công cụ sẽ tự động thích ứng ngay theo đúng các quyền đã cấp.
+            </p>
+          </div>
+
+          <div className="p-4 bg-white rounded-2xl border border-slate-200 shadow-2xs space-y-2.5 text-xs text-slate-700">
+            <div className="flex items-center gap-2 font-bold text-indigo-900 text-sm">
+              <Cloud className="w-4 h-4 text-blue-600" />
+              <span>Đồng bộ Hai Chiều với CSDL Supabase</span>
+            </div>
+            <p className="leading-relaxed">
+              • <b>Supabase Auth (auth.users):</b> Trường <code>user_metadata.permissions</code> lưu giữ mảng các quyền hạn của tài khoản.
+            </p>
+            <p className="leading-relaxed">
+              • <b>Bảng CSDL (public.profiles):</b> Cột <code>permissions JSONB</code> lưu trữ trực tiếp trong CSDL bảng hồ sơ, cho phép truy vấn và quản lý tập trung.
+            </p>
+            <p className="leading-relaxed">
+              • <b>Bảo mật RLS:</b> Khi cán bộ đăng nhập, hệ thống tự động kiểm tra quyền hạn hợp lệ từ CSDL Supabase để cấp quyền truy cập các phân hệ.
+            </p>
+          </div>
+        </div>
+      </div>
+    )}
+
+        {/* Modal con: Chỉnh sửa thông tin tài khoản (Đồng bộ 2 chiều Supabase & Ma trận phân quyền) */}
         {editingUser && (
           <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-2xs">
-            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl w-full overflow-hidden flex flex-col max-h-[92vh]">
               <div className="px-5 py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="p-2 bg-white/10 rounded-xl">
                     <Pencil className="w-4 h-4 text-white" />
                   </div>
                   <div>
-                    <h4 className="text-sm font-bold">Chỉnh sửa thông tin người dùng</h4>
-                    <p className="text-[11px] text-blue-100">Cập nhật hai chiều với CSDL Supabase</p>
+                    <h4 className="text-sm font-bold">Chỉnh sửa thông tin & Ma trận phân quyền</h4>
+                    <p className="text-[11px] text-blue-100">Đồng bộ 2 chiều với Supabase Auth metadata và CSDL profiles</p>
                   </div>
                 </div>
                 <button 
@@ -1020,6 +1518,106 @@ export const AdminUserManagementModal: React.FC<AdminUserManagementModalProps> =
                         Tạm khóa tài khoản
                       </span>
                     </label>
+                  </div>
+                </div>
+
+                {/* Khu vực Ma trận phân quyền chức năng chi tiết */}
+                <div className="pt-3 border-t border-slate-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1 bg-indigo-100 text-indigo-700 rounded-lg">
+                        <Shield className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-slate-800 text-xs">Ma trận Phân quyền theo Nhóm Chức năng</span>
+                        <span className="ml-2 px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200">
+                          Đã chọn: {editPermissions.length}/9 quyền
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => applyRolePresetToEdit(editRole)}
+                        className="px-2 py-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 flex items-center gap-1 transition-colors"
+                        title="Khôi phục quyền mặc định theo vai trò đã chọn"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Mặc định vai trò</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={selectAllEditPermissions}
+                        className="px-2 py-1 text-[11px] font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                      >
+                        Chọn tất cả
+                      </button>
+                      <button
+                        type="button"
+                        onClick={clearAllEditPermissions}
+                        className="px-2 py-1 text-[11px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors"
+                      >
+                        Bỏ chọn
+                      </button>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-500 mb-2.5">
+                    Admin có thể linh hoạt tick chọn/bỏ chọn từng quyền độc lập. Khi bấm lưu, dữ liệu sẽ được ghi nhận đồng thời vào <b>Supabase Auth (user_metadata)</b> và bảng CSDL <b>public.profiles</b>.
+                  </p>
+
+                  {/* 4 Nhóm chức năng */}
+                  <div className="space-y-3 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    {(['Cốt lõi', 'Khảo thí', 'CSDL Tra cứu', 'Hệ thống'] as const).map(cat => {
+                      const permsInCat = ALL_PERMISSIONS.filter(p => p.category === cat);
+                      if (permsInCat.length === 0) return null;
+                      const catBadgeColor = 
+                        cat === 'Cốt lõi' ? 'bg-blue-100 text-blue-800 border-blue-200' :
+                        cat === 'Khảo thí' ? 'bg-emerald-100 text-emerald-800 border-emerald-200' :
+                        cat === 'CSDL Tra cứu' ? 'bg-amber-100 text-amber-800 border-amber-200' :
+                        'bg-purple-100 text-purple-800 border-purple-200';
+
+                      return (
+                        <div key={cat} className="space-y-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${catBadgeColor}`}>
+                              Nhóm {cat}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            {permsInCat.map(p => {
+                              const isChecked = editPermissions.includes(p.id);
+                              return (
+                                <label
+                                  key={p.id}
+                                  className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-start gap-2.5 ${
+                                    isChecked
+                                      ? 'bg-white border-indigo-400 shadow-2xs ring-1 ring-indigo-300'
+                                      : 'bg-white/60 border-slate-200 text-slate-500 hover:bg-white'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => toggleEditPermission(p.id)}
+                                    className="mt-0.5 rounded text-indigo-600 focus:ring-indigo-500"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <div className={`text-xs font-bold leading-tight ${isChecked ? 'text-indigo-950' : 'text-slate-700'}`}>
+                                      {p.label}
+                                    </div>
+                                    <div className="text-[10.5px] text-slate-500 leading-snug mt-0.5">
+                                      {p.description}
+                                    </div>
+                                  </div>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
